@@ -147,20 +147,32 @@ func CloudWatchAPIRateLimit(rateLimit *cloudwatch.RateLimit) OptionsFunc {
 	}
 }
 
-func CloudWatchPerAPIRateLimit(listMetrics, getMetricData, getMetricStatistics *cloudwatch.RateLimit) OptionsFunc {
+func CloudWatchListMetricsRateLimit(rateLimit *cloudwatch.RateLimit) OptionsFunc {
 	return func(o *options) error {
 		if o.cloudwatchRateLimit.PerAPILimits == nil {
 			o.cloudwatchRateLimit.PerAPILimits = make(map[string]*cloudwatch.RateLimit)
 		}
-		if listMetrics != nil {
-			o.cloudwatchRateLimit.PerAPILimits["ListMetrics"] = listMetrics
+		o.cloudwatchRateLimit.PerAPILimits["ListMetrics"] = rateLimit
+		return nil
+	}
+}
+
+func CloudWatchGetMetricDataRateLimit(rateLimit *cloudwatch.RateLimit) OptionsFunc {
+	return func(o *options) error {
+		if o.cloudwatchRateLimit.PerAPILimits == nil {
+			o.cloudwatchRateLimit.PerAPILimits = make(map[string]*cloudwatch.RateLimit)
 		}
-		if getMetricData != nil {
-			o.cloudwatchRateLimit.PerAPILimits["GetMetricData"] = getMetricData
+		o.cloudwatchRateLimit.PerAPILimits["GetMetricData"] = rateLimit
+		return nil
+	}
+}
+
+func CloudWatchGetMetricStatisticsRateLimit(rateLimit *cloudwatch.RateLimit) OptionsFunc {
+	return func(o *options) error {
+		if o.cloudwatchRateLimit.PerAPILimits == nil {
+			o.cloudwatchRateLimit.PerAPILimits = make(map[string]*cloudwatch.RateLimit)
 		}
-		if getMetricStatistics != nil {
-			o.cloudwatchRateLimit.PerAPILimits["GetMetricStatistics"] = getMetricStatistics
-		}
+		o.cloudwatchRateLimit.PerAPILimits["GetMetricStatistics"] = rateLimit
 		return nil
 	}
 }
