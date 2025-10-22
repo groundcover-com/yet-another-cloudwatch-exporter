@@ -164,17 +164,23 @@ func NewFactory(logger *slog.Logger, jobsCfg model.JobsConfig, fips bool) (*Cach
 	}, nil
 }
 
-func (c *CachingFactory) GetCloudwatchClient(region string, role model.Role, concurrency cloudwatch_client.ConcurrencyConfig) cloudwatch_client.Client {
+func (c *CachingFactory) GetCloudwatchClient(region string, role model.Role, concurrency cloudwatch_client.ConcurrencyConfig, rateLimit cloudwatch_client.RateLimitConfig) cloudwatch_client.Client {
 	if !c.refreshed {
 		// if we have not refreshed then we need to lock in case we are accessing concurrently
 		c.mu.Lock()
 		defer c.mu.Unlock()
 	}
 	if client := c.clients[role][region].cloudwatch; client != nil {
-		return cloudwatch_client.NewLimitedConcurrencyClient(client, concurrency.NewLimiter())
+		client = cloudwatch_client.NewLimitedConcurrencyClient(client, concurrency.NewLimiter())
+		// Add rate limiting if configured
+		client = cloudwatch_client.NewRateLimitedClientFromConfig(client, rateLimit)
+		return client
 	}
 	c.clients[role][region].cloudwatch = cloudwatch_v2.NewClient(c.logger, c.createCloudwatchClient(c.clients[role][region].awsConfig))
-	return cloudwatch_client.NewLimitedConcurrencyClient(c.clients[role][region].cloudwatch, concurrency.NewLimiter())
+	client := cloudwatch_client.NewLimitedConcurrencyClient(c.clients[role][region].cloudwatch, concurrency.NewLimiter())
+	// Add rate limiting if configured
+	client = cloudwatch_client.NewRateLimitedClientFromConfig(client, rateLimit)
+	return client
 }
 
 func (c *CachingFactory) GetTaggingClient(region string, role model.Role, concurrencyLimit int) tagging.Client {

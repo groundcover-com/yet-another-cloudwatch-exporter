@@ -1,6 +1,6 @@
 module github.com/prometheus-community/yet-another-cloudwatch-exporter
 
-go 1.23.0
+go 1.24.0
 
 require (
 	github.com/aws/aws-sdk-go v1.55.6
@@ -17,7 +17,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/iam v1.41.1
 	github.com/aws/aws-sdk-go-v2/service/resourcegroupstaggingapi v1.26.2
 	github.com/aws/aws-sdk-go-v2/service/shield v1.30.2
-	github.com/aws/aws-sdk-go-v2/service/sqs v1.38.8
 	github.com/aws/aws-sdk-go-v2/service/storagegateway v1.37.0
 	github.com/aws/aws-sdk-go-v2/service/sts v1.33.18
 	github.com/aws/smithy-go v1.22.4
@@ -31,6 +30,7 @@ require (
 	github.com/urfave/cli/v2 v2.27.6
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948
 	golang.org/x/sync v0.15.0
+	golang.org/x/time v0.14.0
 	gopkg.in/yaml.v2 v2.4.0
 )
 
@@ -51,6 +51,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
+	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect

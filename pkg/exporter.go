@@ -44,6 +44,8 @@ var Metrics = []prometheus.Collector{
 	promutil.DmsAPICounter,
 	promutil.StoragegatewayAPICounter,
 	promutil.DuplicateMetricsFilteredCounter,
+	promutil.CloudwatchRateLimitWaitCounter,
+	promutil.CloudwatchRateLimitAllowedCounter,
 }
 
 const (
@@ -62,6 +64,11 @@ var DefaultCloudwatchConcurrency = cloudwatch.ConcurrencyConfig{
 	GetMetricStatistics: 5,
 }
 
+var DefaultCloudwatchRateLimit = cloudwatch.RateLimitConfig{
+	SingleLimit:  nil, // nil means no rate limiting
+	PerAPILimits: nil,
+}
+
 // featureFlagsMap is a map that contains the enabled feature flags. If a key is not present, it means the feature flag
 // is disabled.
 type featureFlagsMap map[string]struct{}
@@ -73,6 +80,7 @@ type options struct {
 	resourceInventory     resourceinventory.Store
 	featureFlags          featureFlagsMap
 	cloudwatchConcurrency cloudwatch.ConcurrencyConfig
+	cloudwatchRateLimit   cloudwatch.RateLimitConfig
 }
 
 // IsFeatureEnabled implements the FeatureFlags interface, allowing us to inject the options-configure feature flags in the rest of the code.
@@ -132,6 +140,31 @@ func CloudWatchPerAPILimitConcurrency(listMetrics, getMetricData, getMetricStati
 	}
 }
 
+func CloudWatchAPIRateLimit(rateLimit *cloudwatch.RateLimit) OptionsFunc {
+	return func(o *options) error {
+		o.cloudwatchRateLimit.SingleLimit = rateLimit
+		return nil
+	}
+}
+
+func CloudWatchPerAPIRateLimit(listMetrics, getMetricData, getMetricStatistics *cloudwatch.RateLimit) OptionsFunc {
+	return func(o *options) error {
+		if o.cloudwatchRateLimit.PerAPILimits == nil {
+			o.cloudwatchRateLimit.PerAPILimits = make(map[string]*cloudwatch.RateLimit)
+		}
+		if listMetrics != nil {
+			o.cloudwatchRateLimit.PerAPILimits["ListMetrics"] = listMetrics
+		}
+		if getMetricData != nil {
+			o.cloudwatchRateLimit.PerAPILimits["GetMetricData"] = getMetricData
+		}
+		if getMetricStatistics != nil {
+			o.cloudwatchRateLimit.PerAPILimits["GetMetricStatistics"] = getMetricStatistics
+		}
+		return nil
+	}
+}
+
 func TaggingAPIConcurrency(maxConcurrency int) OptionsFunc {
 	return func(o *options) error {
 		if maxConcurrency <= 0 {
@@ -167,6 +200,7 @@ func defaultOptions() options {
 		taggingAPIConcurrency: DefaultTaggingAPIConcurrency,
 		featureFlags:          make(featureFlagsMap),
 		cloudwatchConcurrency: DefaultCloudwatchConcurrency,
+		cloudwatchRateLimit:   DefaultCloudwatchRateLimit,
 		resourceInventory:     resourceinventory.Nop(),
 	}
 }
@@ -213,6 +247,7 @@ func UpdateMetrics(
 		factory,
 		options.metricsPerQuery,
 		options.cloudwatchConcurrency,
+		options.cloudwatchRateLimit,
 		options.taggingAPIConcurrency,
 		options.resourceInventory,
 	)
