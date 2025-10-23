@@ -65,7 +65,6 @@ var DefaultCloudwatchConcurrency = cloudwatch.ConcurrencyConfig{
 }
 
 var DefaultCloudwatchRateLimit = cloudwatch.RateLimitConfig{
-	SingleLimit:  nil, // nil means no rate limiting
 	PerAPILimits: nil,
 }
 
@@ -136,13 +135,6 @@ func CloudWatchPerAPILimitConcurrency(listMetrics, getMetricData, getMetricStati
 		o.cloudwatchConcurrency.ListMetrics = listMetrics
 		o.cloudwatchConcurrency.GetMetricData = getMetricData
 		o.cloudwatchConcurrency.GetMetricStatistics = getMetricStatistics
-		return nil
-	}
-}
-
-func CloudWatchAPIRateLimit(rateLimit *cloudwatch.RateLimit) OptionsFunc {
-	return func(o *options) error {
-		o.cloudwatchRateLimit.SingleLimit = rateLimit
 		return nil
 	}
 }

@@ -32,39 +32,21 @@ type RateLimit struct {
 
 // RateLimitConfig holds rate limiting configuration for CloudWatch APIs
 type RateLimitConfig struct {
-	// Single rate limit applied to all APIs (if PerAPILimits is empty)
-	SingleLimit *RateLimit
-
-	// Per-API rate limits (takes precedence over SingleLimit if set)
+	// Per-API rate limits
 	PerAPILimits map[string]*RateLimit // map[apiName]rateLimit
 }
 
 // NewRateLimitedClientFromConfig creates a rate-limited client from config
 func NewRateLimitedClientFromConfig(client Client, config RateLimitConfig) Client {
 	// If no rate limiting configured, return original client
-	if config.SingleLimit == nil && len(config.PerAPILimits) == 0 {
+	if len(config.PerAPILimits) == 0 {
 		return client
 	}
 
-	// Use per-API limits if available, otherwise fall back to single limit
-	if len(config.PerAPILimits) > 0 {
-		rateLimiter, err := NewPerAPIRateLimiter(
-			config.PerAPILimits[listMetricsCall],
-			config.PerAPILimits[getMetricDataCall],
-			config.PerAPILimits[getMetricStatisticsCall],
-		)
-		if err != nil {
-			return client // Return original client if config is invalid
-		}
-		return &simpleRateLimitedClient{client: client, rateLimiter: rateLimiter}
-	}
-
-	// Use single rate limit for all APIs
-	rateLimiter, err := NewSingleRateLimiter(config.SingleLimit)
+	rateLimiter, err := NewPerAPIRateLimiter(config.PerAPILimits)
 	if err != nil {
 		return client // Return original client if config is invalid
 	}
-
 	return &simpleRateLimitedClient{client: client, rateLimiter: rateLimiter}
 }
 
@@ -75,45 +57,39 @@ type simpleRateLimitedClient struct {
 }
 
 func (c *simpleRateLimitedClient) ListMetrics(ctx context.Context, namespace string, metric *model.MetricConfig, recentlyActiveOnly bool, fn func(page []*model.Metric)) error {
-	// Check if request would be allowed immediately
-	if c.rateLimiter.Allow(listMetricsCall) {
-		promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(listMetricsCall).Inc()
-	} else {
-		// Request will be rate limited
-		promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(listMetricsCall).Inc()
-		if err := c.rateLimiter.Wait(ctx, listMetricsCall); err != nil {
-			return err
-		}
+	_, err := c.limitAPICalls(ctx, listMetricsCall)
+	if err != nil {
+		return err
 	}
 	return c.client.ListMetrics(ctx, namespace, metric, recentlyActiveOnly, fn)
 }
 
 func (c *simpleRateLimitedClient) GetMetricData(ctx context.Context, getMetricData []*model.CloudwatchData, namespace string, startTime time.Time, endTime time.Time) []MetricDataResult {
-	// Check if request would be allowed immediately
-	if c.rateLimiter.Allow(getMetricDataCall) {
-		promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(getMetricDataCall).Inc()
-	} else {
-		// Request will be rate limited
-		promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(getMetricDataCall).Inc()
-		if err := c.rateLimiter.Wait(ctx, getMetricDataCall); err != nil {
-			return nil
-		}
+	_, err := c.limitAPICalls(ctx, getMetricDataCall)
+	if err != nil {
+		return nil
 	}
 	return c.client.GetMetricData(ctx, getMetricData, namespace, startTime, endTime)
 }
 
 func (c *simpleRateLimitedClient) GetMetricStatistics(ctx context.Context, logger *slog.Logger, dimensions []model.Dimension, namespace string, metric *model.MetricConfig) []*model.Datapoint {
-	// Check if request would be allowed immediately
-	if c.rateLimiter.Allow(getMetricStatisticsCall) {
-		promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(getMetricStatisticsCall).Inc()
-	} else {
-		// Request will be rate limited
-		promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(getMetricStatisticsCall).Inc()
-		if err := c.rateLimiter.Wait(ctx, getMetricStatisticsCall); err != nil {
-			return nil
-		}
+	_, err := c.limitAPICalls(ctx, getMetricStatisticsCall)
+	if err != nil {
+		return nil
 	}
 	return c.client.GetMetricStatistics(ctx, logger, dimensions, namespace, metric)
+}
+
+func (c *simpleRateLimitedClient) limitAPICalls(ctx context.Context, apiName string) (bool, error) {
+	if c.rateLimiter.Allow(apiName) {
+		promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(apiName).Inc()
+		return true, nil
+	}
+	promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(apiName).Inc()
+	if err := c.rateLimiter.Wait(ctx, apiName); err != nil {
+		return false, err
+	}
+	return true, nil // After waiting, the call should proceed
 }
 
 // rateLimitToLimiter converts a RateLimit to rate.Limit and burst
@@ -140,64 +116,23 @@ type RateLimiter interface {
 	Allow(apiName string) bool
 }
 
-// singleRateLimiter applies the same rate limit to all API calls
-type singleRateLimiter struct {
-	limiter *rate.Limiter
-}
-
-// NewSingleRateLimiter creates a rate limiter that applies the same limit to all APIs
-func NewSingleRateLimiter(rl *RateLimit) (RateLimiter, error) {
-	rateLimit, burst, err := rateLimitToLimiter(rl)
-	if err != nil {
-		return nil, err
-	}
-	return &singleRateLimiter{
-		limiter: rate.NewLimiter(rateLimit, burst),
-	}, nil
-}
-
-func (s *singleRateLimiter) Wait(ctx context.Context, apiName string) error {
-	return s.limiter.Wait(ctx)
-}
-
-func (s *singleRateLimiter) Allow(apiName string) bool {
-	return s.limiter.Allow()
-}
-
 // perAPIRateLimiter applies different rate limits per API
 type perAPIRateLimiter struct {
 	limiters map[string]*rate.Limiter
 }
 
 // NewPerAPIRateLimiter creates a rate limiter with different limits per API
-func NewPerAPIRateLimiter(listMetrics, getMetricData, getMetricStatistics *RateLimit) (RateLimiter, error) {
+func NewPerAPIRateLimiter(apiLimits map[string]*RateLimit) (RateLimiter, error) {
 	limiters := make(map[string]*rate.Limiter)
 
-	// Create limiter for ListMetrics
-	if listMetrics != nil {
-		rateLimit, burst, err := rateLimitToLimiter(listMetrics)
-		if err != nil {
-			return nil, fmt.Errorf("invalid ListMetrics rate limit: %w", err)
+	for apiName, rateLimit := range apiLimits {
+		if rateLimit != nil {
+			rateLimitValue, burst, err := rateLimitToLimiter(rateLimit)
+			if err != nil {
+				return nil, fmt.Errorf("invalid %s rate limit: %w", apiName, err)
+			}
+			limiters[apiName] = rate.NewLimiter(rateLimitValue, burst)
 		}
-		limiters[listMetricsCall] = rate.NewLimiter(rateLimit, burst)
-	}
-
-	// Create limiter for GetMetricData
-	if getMetricData != nil {
-		rateLimit, burst, err := rateLimitToLimiter(getMetricData)
-		if err != nil {
-			return nil, fmt.Errorf("invalid GetMetricData rate limit: %w", err)
-		}
-		limiters[getMetricDataCall] = rate.NewLimiter(rateLimit, burst)
-	}
-
-	// Create limiter for GetMetricStatistics
-	if getMetricStatistics != nil {
-		rateLimit, burst, err := rateLimitToLimiter(getMetricStatistics)
-		if err != nil {
-			return nil, fmt.Errorf("invalid GetMetricStatistics rate limit: %w", err)
-		}
-		limiters[getMetricStatisticsCall] = rate.NewLimiter(rateLimit, burst)
 	}
 
 	return &perAPIRateLimiter{limiters: limiters}, nil
