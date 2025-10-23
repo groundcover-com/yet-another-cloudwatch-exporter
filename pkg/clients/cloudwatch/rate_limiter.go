@@ -30,63 +30,77 @@ type RateLimit struct {
 	Duration time.Duration // Time period for the count
 }
 
-// RateLimitConfig holds rate limiting configuration for CloudWatch APIs
+// NewSingleAPIRateLimiter creates a rate limiter for a single API
+func NewSingleAPIRateLimiter(apiName string, rateLimit *RateLimit) (RateLimiter, error) {
+	if rateLimit == nil {
+		return nil, nil
+	}
+
+	fmt.Printf("[DEBUG] Rate limiter: Creating %s rate limiter: %.2f requests/second (%d per %v)\n",
+		apiName, float64(rateLimit.Count)/rateLimit.Duration.Seconds(), rateLimit.Count, rateLimit.Duration)
+
+	limits := map[string]*RateLimit{
+		apiName: rateLimit,
+	}
+	return NewPerAPIRateLimiter(limits)
+}
+
+// RateLimitConfig holds actual rate limiter instances for CloudWatch APIs
 type RateLimitConfig struct {
-	// Per-API rate limits
-	PerAPILimits map[string]*RateLimit // map[apiName]rateLimit
+	// Per-API rate limiters (already created and ready to use)
+	PerAPILimiters map[string]RateLimiter // map[apiName]rateLimiter
 }
 
 // NewRateLimitedClientFromConfig creates a rate-limited client from config
 func NewRateLimitedClientFromConfig(client Client, config RateLimitConfig) Client {
-	// If no rate limiting configured, return original client
-	if len(config.PerAPILimits) == 0 {
+	// Check if any rate limiters are configured
+	if len(config.PerAPILimiters) == 0 {
+		// No rate limiting configured - return original client unchanged
 		return client
 	}
 
-	rateLimiter, err := NewPerAPIRateLimiter(config.PerAPILimits)
-	if err != nil {
-		return client // Return original client if config is invalid
-	}
-	return &simpleRateLimitedClient{client: client, rateLimiter: rateLimiter}
+	// Create a combined rate limiter from all the individual API rate limiters
+	rateLimiter := &combinedRateLimiter{limiters: config.PerAPILimiters}
+	return &SimpleRateLimitedClient{Client: client, RateLimiter: rateLimiter}
 }
 
-// simpleRateLimitedClient is a minimal wrapper that only adds rate limiting
-type simpleRateLimitedClient struct {
-	client      Client
-	rateLimiter RateLimiter
+// SimpleRateLimitedClient is a minimal wrapper that only adds rate limiting
+type SimpleRateLimitedClient struct {
+	Client      Client
+	RateLimiter RateLimiter
 }
 
-func (c *simpleRateLimitedClient) ListMetrics(ctx context.Context, namespace string, metric *model.MetricConfig, recentlyActiveOnly bool, fn func(page []*model.Metric)) error {
+func (c *SimpleRateLimitedClient) ListMetrics(ctx context.Context, namespace string, metric *model.MetricConfig, recentlyActiveOnly bool, fn func(page []*model.Metric)) error {
 	_, err := c.limitAPICalls(ctx, listMetricsCall)
 	if err != nil {
 		return err
 	}
-	return c.client.ListMetrics(ctx, namespace, metric, recentlyActiveOnly, fn)
+	return c.Client.ListMetrics(ctx, namespace, metric, recentlyActiveOnly, fn)
 }
 
-func (c *simpleRateLimitedClient) GetMetricData(ctx context.Context, getMetricData []*model.CloudwatchData, namespace string, startTime time.Time, endTime time.Time) []MetricDataResult {
+func (c *SimpleRateLimitedClient) GetMetricData(ctx context.Context, getMetricData []*model.CloudwatchData, namespace string, startTime time.Time, endTime time.Time) []MetricDataResult {
 	_, err := c.limitAPICalls(ctx, getMetricDataCall)
 	if err != nil {
 		return nil
 	}
-	return c.client.GetMetricData(ctx, getMetricData, namespace, startTime, endTime)
+	return c.Client.GetMetricData(ctx, getMetricData, namespace, startTime, endTime)
 }
 
-func (c *simpleRateLimitedClient) GetMetricStatistics(ctx context.Context, logger *slog.Logger, dimensions []model.Dimension, namespace string, metric *model.MetricConfig) []*model.Datapoint {
+func (c *SimpleRateLimitedClient) GetMetricStatistics(ctx context.Context, logger *slog.Logger, dimensions []model.Dimension, namespace string, metric *model.MetricConfig) []*model.Datapoint {
 	_, err := c.limitAPICalls(ctx, getMetricStatisticsCall)
 	if err != nil {
 		return nil
 	}
-	return c.client.GetMetricStatistics(ctx, logger, dimensions, namespace, metric)
+	return c.Client.GetMetricStatistics(ctx, logger, dimensions, namespace, metric)
 }
 
-func (c *simpleRateLimitedClient) limitAPICalls(ctx context.Context, apiName string) (bool, error) {
-	if c.rateLimiter.Allow(apiName) {
+func (c *SimpleRateLimitedClient) limitAPICalls(ctx context.Context, apiName string) (bool, error) {
+	if c.RateLimiter.Allow(apiName) {
 		promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(apiName).Inc()
 		return true, nil
 	}
 	promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(apiName).Inc()
-	if err := c.rateLimiter.Wait(ctx, apiName); err != nil {
+	if err := c.RateLimiter.Wait(ctx, apiName); err != nil {
 		return false, err
 	}
 	return true, nil // After waiting, the call should proceed
@@ -121,6 +135,11 @@ type perAPIRateLimiter struct {
 	limiters map[string]*rate.Limiter
 }
 
+// combinedRateLimiter combines multiple individual API rate limiters
+type combinedRateLimiter struct {
+	limiters map[string]RateLimiter
+}
+
 // NewPerAPIRateLimiter creates a rate limiter with different limits per API
 func NewPerAPIRateLimiter(apiLimits map[string]*RateLimit) (RateLimiter, error) {
 	limiters := make(map[string]*rate.Limiter)
@@ -150,4 +169,18 @@ func (p *perAPIRateLimiter) Allow(apiName string) bool {
 		return limiter.Allow()
 	}
 	return true // No rate limiting for this API
+}
+
+func (c *combinedRateLimiter) Allow(apiName string) bool {
+	if limiter, exists := c.limiters[apiName]; exists {
+		return limiter.Allow(apiName)
+	}
+	return true // No limit for this API
+}
+
+func (c *combinedRateLimiter) Wait(ctx context.Context, apiName string) error {
+	if limiter, exists := c.limiters[apiName]; exists {
+		return limiter.Wait(ctx, apiName)
+	}
+	return nil // No limit for this API
 }

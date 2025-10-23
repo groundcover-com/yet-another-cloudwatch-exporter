@@ -170,16 +170,16 @@ func (c *CachingFactory) GetCloudwatchClient(region string, role model.Role, con
 		c.mu.Lock()
 		defer c.mu.Unlock()
 	}
-	if client := c.clients[role][region].cloudwatch; client != nil {
-		client = cloudwatch_client.NewLimitedConcurrencyClient(client, concurrency.NewLimiter())
-		// Add rate limiting if configured
-		client = cloudwatch_client.NewRateLimitedClientFromConfig(client, rateLimit)
-		return client
+
+	if cachedClient := c.clients[role][region].cloudwatch; cachedClient != nil {
+		return cachedClient
 	}
-	c.clients[role][region].cloudwatch = cloudwatch_v2.NewClient(c.logger, c.createCloudwatchClient(c.clients[role][region].awsConfig))
-	client := cloudwatch_client.NewLimitedConcurrencyClient(c.clients[role][region].cloudwatch, concurrency.NewLimiter())
-	// Add rate limiting if configured
+
+	// Create new client and cache it
+	client := cloudwatch_v2.NewClient(c.logger, c.createCloudwatchClient(c.clients[role][region].awsConfig))
 	client = cloudwatch_client.NewRateLimitedClientFromConfig(client, rateLimit)
+	client = cloudwatch_client.NewLimitedConcurrencyClient(client, concurrency.NewLimiter())
+	c.clients[role][region].cloudwatch = client
 	return client
 }
 

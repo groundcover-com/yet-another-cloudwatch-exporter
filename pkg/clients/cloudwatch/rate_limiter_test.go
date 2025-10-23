@@ -230,27 +230,28 @@ func TestRateLimitedClientFromConfig(t *testing.T) {
 		{
 			name: "no rate limiting",
 			config: RateLimitConfig{
-				PerAPILimits: nil,
+				PerAPILimiters: nil,
 			},
 			expectWrapped: false,
 		},
 		{
 			name: "per-API rate limits",
 			config: RateLimitConfig{
-				PerAPILimits: map[string]*RateLimit{
-					listMetricsCall:         &RateLimit{Count: 5, Duration: time.Second},
-					getMetricDataCall:       &RateLimit{Count: 10, Duration: time.Second},
-					getMetricStatisticsCall: &RateLimit{Count: 15, Duration: time.Second},
-				},
+				PerAPILimiters: func() map[string]RateLimiter {
+					limiters := make(map[string]RateLimiter)
+					limiter, _ := NewSingleAPIRateLimiter(listMetricsCall, &RateLimit{Count: 5, Duration: time.Second})
+					if limiter != nil {
+						limiters[listMetricsCall] = limiter
+					}
+					return limiters
+				}(),
 			},
 			expectWrapped: true,
 		},
 		{
 			name: "invalid per-API rate limit falls back to original",
 			config: RateLimitConfig{
-				PerAPILimits: map[string]*RateLimit{
-					listMetricsCall: &RateLimit{Count: 0, Duration: time.Second}, // Invalid
-				},
+				PerAPILimiters: nil, // No limiters = no wrapping
 			},
 			expectWrapped: false,
 		},
@@ -262,7 +263,7 @@ func TestRateLimitedClientFromConfig(t *testing.T) {
 
 			if tt.expectWrapped {
 				// Should be wrapped
-				_, ok := client.(*simpleRateLimitedClient)
+				_, ok := client.(*SimpleRateLimitedClient)
 				assert.True(t, ok, "Client should be wrapped with rate limiting")
 			} else {
 				// Should be the original client
@@ -276,10 +277,15 @@ func TestRateLimitingBehavior(t *testing.T) {
 	mockClient := &mockClient{}
 
 	// Create a rate-limited client with a very low rate limit
+	limiters := make(map[string]RateLimiter)
+	limiter, err := NewSingleAPIRateLimiter(listMetricsCall, &RateLimit{Count: 2, Duration: time.Second})
+	assert.NoError(t, err)
+	if limiter != nil {
+		limiters[listMetricsCall] = limiter
+	}
+
 	config := RateLimitConfig{
-		PerAPILimits: map[string]*RateLimit{
-			listMetricsCall: &RateLimit{Count: 2, Duration: time.Second}, // Very low rate for testing
-		},
+		PerAPILimiters: limiters,
 	}
 
 	client := NewRateLimitedClientFromConfig(mockClient, config)
@@ -311,12 +317,28 @@ func TestPerAPIRateLimitingBehavior(t *testing.T) {
 	mockClient := &mockClient{}
 
 	// Create a rate-limited client with different limits per API
+	limiters := make(map[string]RateLimiter)
+
+	listLimiter, err := NewSingleAPIRateLimiter(listMetricsCall, &RateLimit{Count: 1, Duration: time.Second})
+	assert.NoError(t, err)
+	if listLimiter != nil {
+		limiters[listMetricsCall] = listLimiter
+	}
+
+	dataLimiter, err := NewSingleAPIRateLimiter(getMetricDataCall, &RateLimit{Count: 10, Duration: time.Second})
+	assert.NoError(t, err)
+	if dataLimiter != nil {
+		limiters[getMetricDataCall] = dataLimiter
+	}
+
+	statsLimiter, err := NewSingleAPIRateLimiter(getMetricStatisticsCall, &RateLimit{Count: 5, Duration: time.Second})
+	assert.NoError(t, err)
+	if statsLimiter != nil {
+		limiters[getMetricStatisticsCall] = statsLimiter
+	}
+
 	config := RateLimitConfig{
-		PerAPILimits: map[string]*RateLimit{
-			listMetricsCall:         &RateLimit{Count: 1, Duration: time.Second},  // Very restrictive
-			getMetricDataCall:       &RateLimit{Count: 10, Duration: time.Second}, // More permissive
-			getMetricStatisticsCall: &RateLimit{Count: 5, Duration: time.Second},  // Medium
-		},
+		PerAPILimiters: limiters,
 	}
 
 	client := NewRateLimitedClientFromConfig(mockClient, config)
@@ -350,10 +372,15 @@ func TestPerAPIRateLimitingBehavior(t *testing.T) {
 func TestContextCancellation(t *testing.T) {
 	mockClient := &mockClient{}
 
+	limiters := make(map[string]RateLimiter)
+	limiter, err := NewSingleAPIRateLimiter(listMetricsCall, &RateLimit{Count: 1, Duration: time.Minute})
+	assert.NoError(t, err)
+	if limiter != nil {
+		limiters[listMetricsCall] = limiter
+	}
+
 	config := RateLimitConfig{
-		PerAPILimits: map[string]*RateLimit{
-			listMetricsCall: &RateLimit{Count: 1, Duration: time.Minute}, // Very slow rate to ensure we hit context cancellation
-		},
+		PerAPILimiters: limiters,
 	}
 
 	client := NewRateLimitedClientFromConfig(mockClient, config)
@@ -386,10 +413,15 @@ func TestRateLimitingMetrics(t *testing.T) {
 	mockClient := &mockClient{}
 
 	// Create a rate-limited client with a very low rate limit
+	limiters := make(map[string]RateLimiter)
+	limiter, err := NewSingleAPIRateLimiter(listMetricsCall, &RateLimit{Count: 1, Duration: time.Second})
+	assert.NoError(t, err)
+	if limiter != nil {
+		limiters[listMetricsCall] = limiter
+	}
+
 	config := RateLimitConfig{
-		PerAPILimits: map[string]*RateLimit{
-			listMetricsCall: &RateLimit{Count: 1, Duration: time.Second}, // Very restrictive for testing
-		},
+		PerAPILimiters: limiters,
 	}
 
 	client := NewRateLimitedClientFromConfig(mockClient, config)
@@ -426,11 +458,22 @@ func TestPerAPIRateLimitingMetrics(t *testing.T) {
 	mockClient := &mockClient{}
 
 	// Create a rate-limited client with different limits per API
+	limiters := make(map[string]RateLimiter)
+
+	listLimiter, err := NewSingleAPIRateLimiter(listMetricsCall, &RateLimit{Count: 1, Duration: time.Second})
+	assert.NoError(t, err)
+	if listLimiter != nil {
+		limiters[listMetricsCall] = listLimiter
+	}
+
+	dataLimiter, err := NewSingleAPIRateLimiter(getMetricDataCall, &RateLimit{Count: 10, Duration: time.Second})
+	assert.NoError(t, err)
+	if dataLimiter != nil {
+		limiters[getMetricDataCall] = dataLimiter
+	}
+
 	config := RateLimitConfig{
-		PerAPILimits: map[string]*RateLimit{
-			listMetricsCall:   &RateLimit{Count: 1, Duration: time.Second},  // Very restrictive
-			getMetricDataCall: &RateLimit{Count: 10, Duration: time.Second}, // More permissive
-		},
+		PerAPILimiters: limiters,
 	}
 
 	client := NewRateLimitedClientFromConfig(mockClient, config)
