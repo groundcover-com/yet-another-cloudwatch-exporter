@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/grafana/regexp"
@@ -36,9 +37,51 @@ type ScrapeConf struct {
 type Discovery struct {
 	ExportedTagsOnMetrics ExportedTagsOnMetrics `yaml:"exportedTagsOnMetrics"`
 	Jobs                  []*Job                `yaml:"jobs"`
+	JobStartupJitter      *JitterConfig         `yaml:"jobStartupJitter"`
 }
 
 type ExportedTagsOnMetrics map[string][]string
+
+type JitterConfig struct {
+	MinDelay Duration `yaml:"minDelay"`
+	MaxDelay Duration `yaml:"maxDelay"`
+}
+
+func (j *JitterConfig) Validate() error {
+	if j.MinDelay.Duration < 0 {
+		return fmt.Errorf("minDelay must be >= 0, got %s", j.MinDelay.Duration)
+	}
+	if j.MaxDelay.Duration < 0 {
+		return fmt.Errorf("maxDelay must be >= 0, got %s", j.MaxDelay.Duration)
+	}
+	if j.MaxDelay.Duration < j.MinDelay.Duration {
+		return fmt.Errorf("maxDelay (%s) must be >= minDelay (%s)", j.MaxDelay.Duration, j.MinDelay.Duration)
+	}
+	return nil
+}
+
+// Duration is a wrapper around time.Duration that supports YAML unmarshaling
+type Duration struct {
+	time.Duration
+}
+
+func FromDuration(d time.Duration) Duration {
+	return Duration{Duration: d}
+}
+
+// UnmarshalYAML implements custom YAML unmarshaling for duration strings
+func (d *Duration) UnmarshalYAML(unmarshal func(interface{}) error) error {
+	var s string
+	if err := unmarshal(&s); err != nil {
+		return err
+	}
+	duration, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("invalid duration: %w", err)
+	}
+	d.Duration = duration
+	return nil
+}
 
 type Tag struct {
 	Key   string `yaml:"key"`
@@ -160,6 +203,12 @@ func (c *ScrapeConf) Validate(logger *slog.Logger) (model.JobsConfig, error) {
 	}
 
 	if c.Discovery.Jobs != nil {
+		if c.Discovery.JobStartupJitter != nil {
+			if err := c.Discovery.JobStartupJitter.Validate(); err != nil {
+				return model.JobsConfig{}, fmt.Errorf("Discovery jobStartupJitter: %w", err)
+			}
+		}
+
 		for idx, job := range c.Discovery.Jobs {
 			err := job.validateDiscoveryJob(logger, idx)
 			if err != nil {
@@ -422,6 +471,13 @@ func (m *Metric) validateMetric(logger *slog.Logger, metricIdx int, parent strin
 func (c *ScrapeConf) toModelConfig() model.JobsConfig {
 	jobsCfg := model.JobsConfig{}
 	jobsCfg.StsRegion = c.StsRegion
+
+	if c.Discovery.JobStartupJitter != nil {
+		jobsCfg.DiscoveryJobStartJitter = &model.JitterConfig{
+			MinDelay: c.Discovery.JobStartupJitter.MinDelay.Duration,
+			MaxDelay: c.Discovery.JobStartupJitter.MaxDelay.Duration,
+		}
+	}
 
 	for _, discoveryJob := range c.Discovery.Jobs {
 		svc := SupportedServices.GetService(discoveryJob.Type)
