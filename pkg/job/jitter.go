@@ -28,11 +28,6 @@ func calculateJitter(cfg *model.JitterConfig) time.Duration {
 	minDelay := cfg.MinDelay
 	maxDelay := cfg.MaxDelay
 
-	// If both are 0, no jitter
-	if minDelay == 0 && maxDelay == 0 {
-		return 0
-	}
-
 	// If they're the same, return that value
 	if minDelay == maxDelay {
 		return minDelay

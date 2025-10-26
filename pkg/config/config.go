@@ -43,43 +43,20 @@ type Discovery struct {
 type ExportedTagsOnMetrics map[string][]string
 
 type JitterConfig struct {
-	MinDelay Duration `yaml:"minDelay"`
-	MaxDelay Duration `yaml:"maxDelay"`
+	MinDelay time.Duration `yaml:"minDelay"`
+	MaxDelay time.Duration `yaml:"maxDelay"`
 }
 
 func (j *JitterConfig) Validate() error {
-	if j.MinDelay.Duration < 0 {
-		return fmt.Errorf("minDelay must be >= 0, got %s", j.MinDelay.Duration)
+	if j.MinDelay < 0 {
+		return fmt.Errorf("minDelay must be >= 0, got %s", j.MinDelay)
 	}
-	if j.MaxDelay.Duration < 0 {
-		return fmt.Errorf("maxDelay must be >= 0, got %s", j.MaxDelay.Duration)
+	if j.MaxDelay < 0 {
+		return fmt.Errorf("maxDelay must be >= 0, got %s", j.MaxDelay)
 	}
-	if j.MaxDelay.Duration < j.MinDelay.Duration {
-		return fmt.Errorf("maxDelay (%s) must be >= minDelay (%s)", j.MaxDelay.Duration, j.MinDelay.Duration)
+	if j.MaxDelay < j.MinDelay {
+		return fmt.Errorf("maxDelay (%s) must be >= minDelay (%s)", j.MaxDelay, j.MinDelay)
 	}
-	return nil
-}
-
-// Duration is a wrapper around time.Duration that supports YAML unmarshaling
-type Duration struct {
-	time.Duration
-}
-
-func FromDuration(d time.Duration) Duration {
-	return Duration{Duration: d}
-}
-
-// UnmarshalYAML implements custom YAML unmarshaling for duration strings
-func (d *Duration) UnmarshalYAML(unmarshal func(interface{}) error) error {
-	var s string
-	if err := unmarshal(&s); err != nil {
-		return err
-	}
-	duration, err := time.ParseDuration(s)
-	if err != nil {
-		return fmt.Errorf("invalid duration: %w", err)
-	}
-	d.Duration = duration
 	return nil
 }
 
@@ -474,8 +451,8 @@ func (c *ScrapeConf) toModelConfig() model.JobsConfig {
 
 	if c.Discovery.JobStartupJitter != nil {
 		jobsCfg.DiscoveryJobStartJitter = &model.JitterConfig{
-			MinDelay: c.Discovery.JobStartupJitter.MinDelay.Duration,
-			MaxDelay: c.Discovery.JobStartupJitter.MaxDelay.Duration,
+			MinDelay: c.Discovery.JobStartupJitter.MinDelay,
+			MaxDelay: c.Discovery.JobStartupJitter.MaxDelay,
 		}
 	}
 
