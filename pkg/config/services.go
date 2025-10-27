@@ -211,6 +211,10 @@ var SupportedServices = serviceConfigs{
 		ResourceFilters: []*string{
 			aws.String("elasticbeanstalk:environment"),
 		},
+		DimensionRegexps: []*regexp.Regexp{
+			// arn uses /${ApplicationName}/${EnvironmentName}, but only EnvironmentName is a Metric Dimension
+			regexp.MustCompile("environment/[^/]+/(?P<EnvironmentName>[^/]+)"),
+		},
 	},
 	{
 		Namespace: "AWS/Billing",
@@ -222,6 +226,10 @@ var SupportedServices = serviceConfigs{
 		ResourceFilters: []*string{
 			aws.String("cassandra"),
 		},
+		DimensionRegexps: []*regexp.Regexp{
+			regexp.MustCompile("keyspace/(?P<Keyspace>[^/]+)/table/(?P<TableName>[^/]+)"),
+			regexp.MustCompile("keyspace/(?P<Keyspace>[^/]+)/"),
+		},
 	},
 	{
 		Namespace: "AWS/CloudFront",
@@ -231,6 +239,16 @@ var SupportedServices = serviceConfigs{
 		},
 		DimensionRegexps: []*regexp.Regexp{
 			regexp.MustCompile("distribution/(?P<DistributionId>[^/]+)"),
+		},
+	},
+	{
+		Namespace: "AWS/CloudWatchSynthetics",
+		Alias:     "synthetics",
+		ResourceFilters: []*string{
+			aws.String("synthetics:canary"),
+		},
+		DimensionRegexps: []*regexp.Regexp{
+			regexp.MustCompile(":canary:(?P<CanaryName>[^/]+)"),
 		},
 	},
 	{
@@ -420,6 +438,16 @@ var SupportedServices = serviceConfigs{
 		},
 		DimensionRegexps: []*regexp.Regexp{
 			regexp.MustCompile("file-system/(?P<FileSystemId>[^/]+)"),
+		},
+	},
+	{
+		Namespace: "AWS/EKS",
+		Alias:     "eks",
+		ResourceFilters: []*string{
+			aws.String("eks:cluster"),
+		},
+		DimensionRegexps: []*regexp.Regexp{
+			regexp.MustCompile(":cluster/(?P<ClusterName>[^/]+)$"),
 		},
 	},
 	{
@@ -1031,6 +1059,12 @@ var SupportedServices = serviceConfigs{
 	{
 		Namespace: "AWS/Bedrock",
 		Alias:     "bedrock",
+		ResourceFilters: []*string{
+			aws.String("bedrock:guardrail"),
+		},
+		DimensionRegexps: []*regexp.Regexp{
+			regexp.MustCompile("(?P<GuardrailArn>.+)"),
+		},
 	},
 	{
 		Namespace: "AWS/Events",
