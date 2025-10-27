@@ -31,7 +31,7 @@ type RateLimit struct {
 }
 
 // NewSingleAPIRateLimiter creates a rate limiter for a single API
-func NewSingleAPIRateLimiter(apiName string, rateLimit *RateLimit) (RateLimiter, error) {
+func NewSingleAPIRateLimiter(apiName string, rateLimit *RateLimit) (*rate.Limiter, error) {
 	if rateLimit == nil {
 		return nil, nil
 	}
@@ -39,28 +39,53 @@ func NewSingleAPIRateLimiter(apiName string, rateLimit *RateLimit) (RateLimiter,
 	fmt.Printf("[DEBUG] Rate limiter: Creating %s rate limiter: %.2f requests/second (%d per %v)\n",
 		apiName, float64(rateLimit.Count)/rateLimit.Duration.Seconds(), rateLimit.Count, rateLimit.Duration)
 
-	limits := map[string]*RateLimit{
-		apiName: rateLimit,
+	rateLimitValue, burst, err := rateLimitToLimiter(rateLimit)
+	if err != nil {
+		return nil, fmt.Errorf("invalid %s rate limit: %w", apiName, err)
 	}
-	return NewPerAPIRateLimiter(limits)
+
+	return rate.NewLimiter(rateLimitValue, burst), nil
 }
 
-// RateLimitConfig holds actual rate limiter instances for CloudWatch APIs
+// RateLimitConfig holds rate limit CONFIGURATION (not instances)
+// Each client will create its own rate limiter instances from this config
 type RateLimitConfig struct {
-	// Per-API rate limiters (already created and ready to use)
-	PerAPILimiters map[string]RateLimiter // map[apiName]rateLimiter
+	// Per-API rate limit configs (not instances - these are templates)
+	PerAPILimits map[string]*RateLimit // map[apiName]*RateLimit
 }
 
 // NewRateLimitedClientFromConfig creates a rate-limited client from config
+// IMPORTANT: Creates NEW rate limiter instances for this client
+// This ensures each (account, region) has its own independent rate limiter
 func NewRateLimitedClientFromConfig(client Client, config RateLimitConfig) Client {
 	// Check if any rate limiters are configured
-	if len(config.PerAPILimiters) == 0 {
+	if len(config.PerAPILimits) == 0 {
 		// No rate limiting configured - return original client unchanged
 		return client
 	}
 
-	// Create a combined rate limiter from all the individual API rate limiters
-	rateLimiter := &combinedRateLimiter{limiters: config.PerAPILimiters}
+	// Create NEW rate limiter instances for THIS client (per account-region)
+	limiters := make(map[string]*rate.Limiter)
+	for apiName, rateLimit := range config.PerAPILimits {
+		if rateLimit != nil {
+			limiter, err := NewSingleAPIRateLimiter(apiName, rateLimit)
+			if err != nil {
+				// Log error but continue with other limiters
+				fmt.Printf("[ERROR] Failed to create rate limiter for %s: %v\n", apiName, err)
+				continue
+			}
+			if limiter != nil {
+				limiters[apiName] = limiter
+			}
+		}
+	}
+
+	// Return original client if no valid limiters were created
+	if len(limiters) == 0 {
+		return client
+	}
+
+	rateLimiter := &perAPIRateLimiter{limiters: limiters}
 	return &SimpleRateLimitedClient{Client: client, RateLimiter: rateLimiter}
 }
 
@@ -86,7 +111,7 @@ func (c *SimpleRateLimitedClient) GetMetricData(ctx context.Context, getMetricDa
 	return c.Client.GetMetricData(ctx, getMetricData, namespace, startTime, endTime)
 }
 
-func (c *SimpleRateLimitedClient) GetMetricStatistics(ctx context.Context, logger *slog.Logger, dimensions []model.Dimension, namespace string, metric *model.MetricConfig) []*model.Datapoint {
+func (c *SimpleRateLimitedClient) GetMetricStatistics(ctx context.Context, logger *slog.Logger, dimensions []model.Dimension, namespace string, metric *model.MetricConfig) []*model.MetricStatisticsResult {
 	_, err := c.limitAPICalls(ctx, getMetricStatisticsCall)
 	if err != nil {
 		return nil
@@ -135,28 +160,6 @@ type perAPIRateLimiter struct {
 	limiters map[string]*rate.Limiter
 }
 
-// combinedRateLimiter combines multiple individual API rate limiters
-type combinedRateLimiter struct {
-	limiters map[string]RateLimiter
-}
-
-// NewPerAPIRateLimiter creates a rate limiter with different limits per API
-func NewPerAPIRateLimiter(apiLimits map[string]*RateLimit) (RateLimiter, error) {
-	limiters := make(map[string]*rate.Limiter)
-
-	for apiName, rateLimit := range apiLimits {
-		if rateLimit != nil {
-			rateLimitValue, burst, err := rateLimitToLimiter(rateLimit)
-			if err != nil {
-				return nil, fmt.Errorf("invalid %s rate limit: %w", apiName, err)
-			}
-			limiters[apiName] = rate.NewLimiter(rateLimitValue, burst)
-		}
-	}
-
-	return &perAPIRateLimiter{limiters: limiters}, nil
-}
-
 func (p *perAPIRateLimiter) Wait(ctx context.Context, apiName string) error {
 	if limiter, exists := p.limiters[apiName]; exists {
 		return limiter.Wait(ctx)
@@ -169,18 +172,4 @@ func (p *perAPIRateLimiter) Allow(apiName string) bool {
 		return limiter.Allow()
 	}
 	return true // No rate limiting for this API
-}
-
-func (c *combinedRateLimiter) Allow(apiName string) bool {
-	if limiter, exists := c.limiters[apiName]; exists {
-		return limiter.Allow(apiName)
-	}
-	return true // No limit for this API
-}
-
-func (c *combinedRateLimiter) Wait(ctx context.Context, apiName string) error {
-	if limiter, exists := c.limiters[apiName]; exists {
-		return limiter.Wait(ctx, apiName)
-	}
-	return nil // No limit for this API
 }

@@ -65,7 +65,7 @@ var DefaultCloudwatchConcurrency = cloudwatch.ConcurrencyConfig{
 }
 
 var DefaultCloudwatchRateLimit = cloudwatch.RateLimitConfig{
-	PerAPILimiters: nil,
+	PerAPILimits: nil,
 }
 
 // featureFlagsMap is a map that contains the enabled feature flags. If a key is not present, it means the feature flag
@@ -141,16 +141,11 @@ func CloudWatchPerAPILimitConcurrency(listMetrics, getMetricData, getMetricStati
 
 func CloudWatchListMetricsRateLimit(rateLimit *cloudwatch.RateLimit) OptionsFunc {
 	return func(o *options) error {
-		if o.cloudwatchRateLimit.PerAPILimiters == nil {
-			o.cloudwatchRateLimit.PerAPILimiters = make(map[string]cloudwatch.RateLimiter)
+		if o.cloudwatchRateLimit.PerAPILimits == nil {
+			o.cloudwatchRateLimit.PerAPILimits = make(map[string]*cloudwatch.RateLimit)
 		}
-		
-		limiter, err := cloudwatch.NewSingleAPIRateLimiter("ListMetrics", rateLimit)
-		if err != nil {
-			return err
-		}
-		if limiter != nil {
-			o.cloudwatchRateLimit.PerAPILimiters["ListMetrics"] = limiter
+		if rateLimit != nil {
+			o.cloudwatchRateLimit.PerAPILimits["ListMetrics"] = rateLimit
 		}
 		return nil
 	}
@@ -158,16 +153,11 @@ func CloudWatchListMetricsRateLimit(rateLimit *cloudwatch.RateLimit) OptionsFunc
 
 func CloudWatchGetMetricDataRateLimit(rateLimit *cloudwatch.RateLimit) OptionsFunc {
 	return func(o *options) error {
-		if o.cloudwatchRateLimit.PerAPILimiters == nil {
-			o.cloudwatchRateLimit.PerAPILimiters = make(map[string]cloudwatch.RateLimiter)
+		if o.cloudwatchRateLimit.PerAPILimits == nil {
+			o.cloudwatchRateLimit.PerAPILimits = make(map[string]*cloudwatch.RateLimit)
 		}
-
-		limiter, err := cloudwatch.NewSingleAPIRateLimiter("GetMetricData", rateLimit)
-		if err != nil {
-			return err
-		}
-		if limiter != nil {
-			o.cloudwatchRateLimit.PerAPILimiters["GetMetricData"] = limiter
+		if rateLimit != nil {
+			o.cloudwatchRateLimit.PerAPILimits["GetMetricData"] = rateLimit
 		}
 		return nil
 	}
@@ -175,16 +165,11 @@ func CloudWatchGetMetricDataRateLimit(rateLimit *cloudwatch.RateLimit) OptionsFu
 
 func CloudWatchGetMetricStatisticsRateLimit(rateLimit *cloudwatch.RateLimit) OptionsFunc {
 	return func(o *options) error {
-		if o.cloudwatchRateLimit.PerAPILimiters == nil {
-			o.cloudwatchRateLimit.PerAPILimiters = make(map[string]cloudwatch.RateLimiter)
+		if o.cloudwatchRateLimit.PerAPILimits == nil {
+			o.cloudwatchRateLimit.PerAPILimits = make(map[string]*cloudwatch.RateLimit)
 		}
-
-		limiter, err := cloudwatch.NewSingleAPIRateLimiter("GetMetricStatistics", rateLimit)
-		if err != nil {
-			return err
-		}
-		if limiter != nil {
-			o.cloudwatchRateLimit.PerAPILimiters["GetMetricStatistics"] = limiter
+		if rateLimit != nil {
+			o.cloudwatchRateLimit.PerAPILimits["GetMetricStatistics"] = rateLimit
 		}
 		return nil
 	}
