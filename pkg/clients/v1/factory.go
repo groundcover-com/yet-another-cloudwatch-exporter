@@ -294,7 +294,7 @@ func (c *CachingFactory) GetCloudwatchClient(region string, role model.Role, con
 		c.mu.Lock()
 		defer c.mu.Unlock()
 	}
-	
+
 	if cachedClient := c.clients[role][region].cloudwatch; cachedClient != nil {
 		return cloudwatch_client.NewLimitedConcurrencyClient(cachedClient, concurrency.NewLimiter())
 	}
