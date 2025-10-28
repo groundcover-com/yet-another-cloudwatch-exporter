@@ -103,7 +103,7 @@ type mockClient struct {
 	callDelay                time.Duration
 }
 
-func (m *mockClient) ListMetrics(ctx context.Context, namespace string, metric *model.MetricConfig, recentlyActiveOnly bool, fn func(page []*model.Metric)) error {
+func (m *mockClient) ListMetrics(_ context.Context, _ string, _ *model.MetricConfig, _ bool, _ func(page []*model.Metric)) error {
 	m.listMetricsCalls++
 	if m.callDelay > 0 {
 		time.Sleep(m.callDelay)
@@ -111,7 +111,7 @@ func (m *mockClient) ListMetrics(ctx context.Context, namespace string, metric *
 	return nil
 }
 
-func (m *mockClient) GetMetricData(ctx context.Context, getMetricData []*model.CloudwatchData, namespace string, startTime time.Time, endTime time.Time) []MetricDataResult {
+func (m *mockClient) GetMetricData(_ context.Context, _ []*model.CloudwatchData, _ string, _ time.Time, _ time.Time) []MetricDataResult {
 	m.getMetricDataCalls++
 	if m.callDelay > 0 {
 		time.Sleep(m.callDelay)
@@ -119,7 +119,7 @@ func (m *mockClient) GetMetricData(ctx context.Context, getMetricData []*model.C
 	return nil
 }
 
-func (m *mockClient) GetMetricStatistics(ctx context.Context, logger *slog.Logger, dimensions []model.Dimension, namespace string, metric *model.MetricConfig) []*model.MetricStatisticsResult {
+func (m *mockClient) GetMetricStatistics(_ context.Context, _ *slog.Logger, _ []model.Dimension, _ string, _ *model.MetricConfig) []*model.MetricStatisticsResult {
 	m.getMetricStatisticsCalls++
 	if m.callDelay > 0 {
 		time.Sleep(m.callDelay)
@@ -301,13 +301,16 @@ func TestRateLimitingBehavior(t *testing.T) {
 	start := time.Now()
 
 	// First call should be immediate
-	client.ListMetrics(ctx, "test", nil, false, nil)
+	err := client.ListMetrics(ctx, "test", nil, false, nil)
+	assert.NoError(t, err)
 
 	// Second call should be immediate (burst)
-	client.ListMetrics(ctx, "test", nil, false, nil)
+	err = client.ListMetrics(ctx, "test", nil, false, nil)
+	assert.NoError(t, err)
 
 	// Third call should be rate limited (should wait ~500ms for 2/sec rate)
-	client.ListMetrics(ctx, "test", nil, false, nil)
+	err = client.ListMetrics(ctx, "test", nil, false, nil)
+	assert.NoError(t, err)
 
 	elapsed := time.Since(start)
 
@@ -336,8 +339,10 @@ func TestPerAPIRateLimitingBehavior(t *testing.T) {
 
 	// Test ListMetrics (most restrictive)
 	start := time.Now()
-	client.ListMetrics(ctx, "test", nil, false, nil) // Should be immediate
-	client.ListMetrics(ctx, "test", nil, false, nil) // Should wait ~1 second
+	err := client.ListMetrics(ctx, "test", nil, false, nil)
+	assert.NoError(t, err) // Should be immediate
+	err = client.ListMetrics(ctx, "test", nil, false, nil)
+	assert.NoError(t, err) // Should wait ~1 second
 	listMetricsElapsed := time.Since(start)
 
 	// Should have taken at least 800ms due to 1/sec rate limiting
@@ -375,11 +380,13 @@ func TestContextCancellation(t *testing.T) {
 	defer cancel()
 
 	// First call should work
-	client.ListMetrics(ctx, "test", nil, false, nil)
+	err := client.ListMetrics(ctx, "test", nil, false, nil)
+	assert.NoError(t, err)
 
 	// Second call should be cancelled due to context timeout
 	start := time.Now()
-	client.ListMetrics(ctx, "test", nil, false, nil)
+	err = client.ListMetrics(ctx, "test", nil, false, nil)
+	assert.NoError(t, err)
 	elapsed := time.Since(start)
 
 	// Should have returned quickly due to context cancellation
@@ -408,7 +415,8 @@ func TestRateLimitingMetrics(t *testing.T) {
 	ctx := context.Background()
 
 	// First call should be allowed immediately
-	client.ListMetrics(ctx, "test", nil, false, nil)
+	err := client.ListMetrics(ctx, "test", nil, false, nil)
+	assert.NoError(t, err)
 
 	// Check that allowed counter was incremented
 	allowedCount := testutil.ToFloat64(promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(listMetricsCall))
@@ -416,7 +424,8 @@ func TestRateLimitingMetrics(t *testing.T) {
 
 	// Second call should be rate limited (will wait)
 	start := time.Now()
-	client.ListMetrics(ctx, "test", nil, false, nil)
+	err = client.ListMetrics(ctx, "test", nil, false, nil)
+	assert.NoError(t, err)
 	elapsed := time.Since(start)
 
 	// Should have waited due to rate limiting
@@ -449,8 +458,10 @@ func TestPerAPIRateLimitingMetrics(t *testing.T) {
 	ctx := context.Background()
 
 	// Test ListMetrics (restrictive)
-	client.ListMetrics(ctx, "test", nil, false, nil) // Should be allowed
-	client.ListMetrics(ctx, "test", nil, false, nil) // Should be rate limited
+	err := client.ListMetrics(ctx, "test", nil, false, nil)
+	assert.NoError(t, err) // Should be allowed
+	err = client.ListMetrics(ctx, "test", nil, false, nil)
+	assert.NoError(t, err) // Should be rate limited
 
 	// Test GetMetricData (permissive)
 	client.GetMetricData(ctx, nil, "test", time.Now(), time.Now()) // Should be allowed
