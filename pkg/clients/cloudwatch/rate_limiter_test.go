@@ -386,7 +386,8 @@ func TestContextCancellation(t *testing.T) {
 	// Second call should be cancelled due to context timeout
 	start := time.Now()
 	err = client.ListMetrics(ctx, "test", nil, false, nil)
-	assert.NoError(t, err)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "context deadline")
 	elapsed := time.Since(start)
 
 	// Should have returned quickly due to context cancellation
