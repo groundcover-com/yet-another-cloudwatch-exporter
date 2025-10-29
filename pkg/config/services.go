@@ -242,13 +242,13 @@ var SupportedServices = serviceConfigs{
 		},
 	},
 	{
-		Namespace: "AWS/CloudWatchSynthetics",
+		Namespace: "CloudWatchSynthetics",
 		Alias:     "synthetics",
 		ResourceFilters: []*string{
 			aws.String("synthetics:canary"),
 		},
 		DimensionRegexps: []*regexp.Regexp{
-			regexp.MustCompile(":canary:(?P<CanaryName>[^/]+)"),
+			regexp.MustCompile(":canary:(?P<CanaryName>[^:]+)$"),
 		},
 	},
 	{
