@@ -135,8 +135,6 @@ func CloudWatchPerAPILimitConcurrency(listMetrics, getMetricData, getMetricStati
 	}
 }
 
-// GlobalRateLimiter allows passing a GlobalRateLimiter to UpdateMetrics
-// The GlobalRateLimiter should be created using cloudwatch.NewGlobalRateLimiter with option functions
 func GlobalRateLimiter(limiter *cloudwatch.GlobalRateLimiter) OptionsFunc {
 	return func(o *options) error {
 		o.globalRateLimiter = limiter
