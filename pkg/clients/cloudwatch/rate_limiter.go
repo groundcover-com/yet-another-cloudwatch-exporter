@@ -48,23 +48,80 @@ func NewSingleAPIRateLimiter(apiName string, rateLimit *RateLimit) (*rate.Limite
 }
 
 // RateLimitConfig holds rate limit CONFIGURATION (not instances)
-// Each client will create its own rate limiter instances from this config
+// This is used internally to build GlobalRateLimiter
 type RateLimitConfig struct {
 	// Per-API rate limit configs (not instances - these are templates)
 	PerAPILimits map[string]*RateLimit // map[apiName]*RateLimit
 }
 
-// NewRateLimitedClientFromConfig creates a rate-limited client from config
-// IMPORTANT: Creates NEW rate limiter instances for this client
-// This ensures each (account, region) has its own independent rate limiter
-func NewRateLimitedClientFromConfig(client Client, config RateLimitConfig) Client {
-	// Check if any rate limiters are configured
-	if len(config.PerAPILimits) == 0 {
-		// No rate limiting configured - return original client unchanged
-		return client
+// GlobalRateLimiter wraps actual rate limiter instances that can be shared
+// across multiple clients with the same ARN, API, and region.
+// This is the main type that should be passed through YACE.
+type GlobalRateLimiter struct {
+	// Per-API rate limiter instances (actual limiters to be shared)
+	limiters map[string]*rate.Limiter
+}
+
+// GlobalRateLimiterOption is a function that configures a RateLimitConfig
+type GlobalRateLimiterOption func(*RateLimitConfig) error
+
+// ListMetricsRateLimit configures the rate limit for ListMetrics API
+func ListMetricsRateLimit(rateLimit *RateLimit) GlobalRateLimiterOption {
+	return func(config *RateLimitConfig) error {
+		if config.PerAPILimits == nil {
+			config.PerAPILimits = make(map[string]*RateLimit)
+		}
+		if rateLimit != nil {
+			config.PerAPILimits["ListMetrics"] = rateLimit
+		}
+		return nil
+	}
+}
+
+// GetMetricDataRateLimit configures the rate limit for GetMetricData API
+func GetMetricDataRateLimit(rateLimit *RateLimit) GlobalRateLimiterOption {
+	return func(config *RateLimitConfig) error {
+		if config.PerAPILimits == nil {
+			config.PerAPILimits = make(map[string]*RateLimit)
+		}
+		if rateLimit != nil {
+			config.PerAPILimits["GetMetricData"] = rateLimit
+		}
+		return nil
+	}
+}
+
+// GetMetricStatisticsRateLimit configures the rate limit for GetMetricStatistics API
+func GetMetricStatisticsRateLimit(rateLimit *RateLimit) GlobalRateLimiterOption {
+	return func(config *RateLimitConfig) error {
+		if config.PerAPILimits == nil {
+			config.PerAPILimits = make(map[string]*RateLimit)
+		}
+		if rateLimit != nil {
+			config.PerAPILimits["GetMetricStatistics"] = rateLimit
+		}
+		return nil
+	}
+}
+
+// NewGlobalRateLimiter creates a GlobalRateLimiter using option functions
+// This initializes actual rate limiter instances that can be shared across multiple UpdateMetrics calls
+func NewGlobalRateLimiter(opts ...GlobalRateLimiterOption) (*GlobalRateLimiter, error) {
+	config := RateLimitConfig{
+		PerAPILimits: make(map[string]*RateLimit),
 	}
 
-	// Create NEW rate limiter instances for THIS client (per account-region)
+	// Apply all options
+	for _, opt := range opts {
+		if err := opt(&config); err != nil {
+			return nil, err
+		}
+	}
+
+	if len(config.PerAPILimits) == 0 {
+		return nil, nil
+	}
+
 	limiters := make(map[string]*rate.Limiter)
 	for apiName, rateLimit := range config.PerAPILimits {
 		if rateLimit != nil {
@@ -80,12 +137,21 @@ func NewRateLimitedClientFromConfig(client Client, config RateLimitConfig) Clien
 		}
 	}
 
-	// Return original client if no valid limiters were created
 	if len(limiters) == 0 {
+		return nil, nil
+	}
+
+	return &GlobalRateLimiter{limiters: limiters}, nil
+}
+
+// NewRateLimitedClient creates a rate-limited client from GlobalRateLimiter
+// This allows sharing rate limiters across multiple clients with the same ARN, API, and region
+func NewRateLimitedClient(client Client, globalLimiter *GlobalRateLimiter) Client {
+	if globalLimiter == nil || len(globalLimiter.limiters) == 0 {
 		return client
 	}
 
-	rateLimiter := &perAPIRateLimiter{limiters: limiters}
+	rateLimiter := &perAPIRateLimiter{limiters: globalLimiter.limiters}
 	return &SimpleRateLimitedClient{Client: client, RateLimiter: rateLimiter}
 }
 

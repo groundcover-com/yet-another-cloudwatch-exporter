@@ -33,7 +33,7 @@ func ScrapeAwsData(
 	factory clients.Factory,
 	metricsPerQuery int,
 	cloudwatchConcurrency cloudwatch.ConcurrencyConfig,
-	cloudwatchRateLimit cloudwatch.RateLimitConfig,
+	globalRateLimiter *cloudwatch.GlobalRateLimiter,
 	taggingAPIConcurrency int,
 	store resourceinventory.Store,
 ) ([]model.TaggedResourceResult, []model.CloudwatchMetricResult) {
@@ -61,7 +61,7 @@ func ScrapeAwsData(
 						jobLogger.Warn("Couldn't get account alias", "err", err)
 					}
 
-					cloudwatchClient := factory.GetCloudwatchClient(region, role, cloudwatchConcurrency, cloudwatchRateLimit)
+					cloudwatchClient := factory.GetCloudwatchClient(region, role, cloudwatchConcurrency, globalRateLimiter)
 					jobLogger.Info("Starting discovery job")
 					gmdProcessor := getmetricdata.NewDefaultProcessor(logger, cloudwatchClient, metricsPerQuery, cloudwatchConcurrency.GetMetricData)
 					taggingClient := tagging.WithExternalStore(jobLogger, factory.GetTaggingClient(region, role, taggingAPIConcurrency), store)
@@ -118,7 +118,7 @@ func ScrapeAwsData(
 						jobLogger.Warn("Couldn't get account alias", "err", err)
 					}
 
-					metrics := runStaticJob(ctx, jobLogger, staticJob, factory.GetCloudwatchClient(region, role, cloudwatchConcurrency, cloudwatchRateLimit))
+					metrics := runStaticJob(ctx, jobLogger, staticJob, factory.GetCloudwatchClient(region, role, cloudwatchConcurrency, globalRateLimiter))
 					metricResult := model.CloudwatchMetricResult{
 						Context: &model.ScrapeContext{
 							Region:       region,
@@ -155,7 +155,7 @@ func ScrapeAwsData(
 						jobLogger.Warn("Couldn't get account alias", "err", err)
 					}
 
-					cloudwatchClient := factory.GetCloudwatchClient(region, role, cloudwatchConcurrency, cloudwatchRateLimit)
+					cloudwatchClient := factory.GetCloudwatchClient(region, role, cloudwatchConcurrency, globalRateLimiter)
 					gmdProcessor := getmetricdata.NewDefaultProcessor(logger, cloudwatchClient, metricsPerQuery, cloudwatchConcurrency.GetMetricData)
 					metrics := runCustomNamespaceJob(ctx, jobLogger, customNamespaceJob, cloudwatchClient, gmdProcessor)
 					metricResult := model.CloudwatchMetricResult{
