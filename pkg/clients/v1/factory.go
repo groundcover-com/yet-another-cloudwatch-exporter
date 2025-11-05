@@ -287,7 +287,7 @@ func createAccountClient(logger *slog.Logger, sts stsiface.STSAPI, iam iamiface.
 	return account_v1.NewClient(logger, sts, iam)
 }
 
-func (c *CachingFactory) GetCloudwatchClient(region string, role model.Role, concurrency cloudwatch_client.ConcurrencyConfig, rateLimit cloudwatch_client.RateLimitConfig) cloudwatch_client.Client {
+func (c *CachingFactory) GetCloudwatchClient(region string, role model.Role, concurrency cloudwatch_client.ConcurrencyConfig, globalRateLimiter *cloudwatch_client.GlobalRateLimiter) cloudwatch_client.Client {
 	if !c.refreshed.Load() {
 
 		// if we have not refreshed then we need to lock in case we are accessing concurrently
@@ -299,7 +299,12 @@ func (c *CachingFactory) GetCloudwatchClient(region string, role model.Role, con
 		return cloudwatch_client.NewLimitedConcurrencyClient(cachedClient, concurrency.NewLimiter())
 	}
 	client := createCloudWatchClient(c.logger, c.session, &region, role, c.fips)
-	client = cloudwatch_client.NewRateLimitedClientFromConfig(client, rateLimit)
+
+	// Apply global rate limiter if provided
+	if globalRateLimiter != nil {
+		client = cloudwatch_client.NewRateLimitedClient(client, globalRateLimiter, region, role.RoleArn)
+	}
+
 	c.clients[role][region].cloudwatch = client
 	return cloudwatch_client.NewLimitedConcurrencyClient(client, concurrency.NewLimiter())
 }

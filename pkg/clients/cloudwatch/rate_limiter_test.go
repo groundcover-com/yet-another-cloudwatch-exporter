@@ -9,73 +9,65 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"golang.org/x/time/rate"
 
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/model"
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/promutil"
 )
 
-func TestRateLimitToLimiter(t *testing.T) {
+func TestCreateLimiter(t *testing.T) {
 	tests := []struct {
 		name          string
-		input         *RateLimit
+		input         *APIRateLimit
 		expectedRate  float64
 		expectedBurst int
 		expectError   bool
 	}{
 		{
-			name:          "nil means no limit",
-			input:         nil,
-			expectedRate:  1e100, // rate.Inf is a very large float
-			expectedBurst: 1,
-			expectError:   false,
-		},
-		{
 			name:          "25 per second",
-			input:         &RateLimit{Count: 25, Duration: time.Second},
+			input:         &APIRateLimit{Count: 25, Duration: time.Second},
 			expectedRate:  25.0,
 			expectedBurst: 25,
 			expectError:   false,
 		},
 		{
 			name:          "100 per minute",
-			input:         &RateLimit{Count: 100, Duration: time.Minute},
-			expectedRate:  100.0 / 60.0, // 1.666... per second
+			input:         &APIRateLimit{Count: 100, Duration: time.Minute},
+			expectedRate:  100.0 / 60.0,
 			expectedBurst: 100,
 			expectError:   false,
 		},
 		{
 			name:          "3600 per hour",
-			input:         &RateLimit{Count: 3600, Duration: time.Hour},
-			expectedRate:  1.0, // 3600/3600 = 1 per second
+			input:         &APIRateLimit{Count: 3600, Duration: time.Hour},
+			expectedRate:  1.0,
 			expectedBurst: 3600,
 			expectError:   false,
 		},
 		{
 			name:        "zero count",
-			input:       &RateLimit{Count: 0, Duration: time.Second},
+			input:       &APIRateLimit{Count: 0, Duration: time.Second},
 			expectError: true,
 		},
 		{
 			name:        "negative count",
-			input:       &RateLimit{Count: -5, Duration: time.Second},
+			input:       &APIRateLimit{Count: -5, Duration: time.Second},
 			expectError: true,
 		},
 		{
 			name:        "zero duration",
-			input:       &RateLimit{Count: 25, Duration: 0},
+			input:       &APIRateLimit{Count: 25, Duration: 0},
 			expectError: true,
 		},
 		{
 			name:        "negative duration",
-			input:       &RateLimit{Count: 25, Duration: -time.Second},
+			input:       &APIRateLimit{Count: 25, Duration: -time.Second},
 			expectError: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rate, burst, err := rateLimitToLimiter(tt.input)
+			limiter, err := createLimiter(tt.input)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -83,14 +75,8 @@ func TestRateLimitToLimiter(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-
-			if tt.input == nil {
-				// For nil (rate.Inf), check it's a very large number
-				assert.True(t, float64(rate) > 1e100, "Expected very large rate (rate.Inf), got %v", rate)
-			} else {
-				assert.InDelta(t, tt.expectedRate, float64(rate), 0.001, "Rate mismatch")
-			}
-			assert.Equal(t, tt.expectedBurst, burst, "Burst mismatch")
+			assert.InDelta(t, tt.expectedRate, float64(limiter.Limit()), 0.001, "Rate mismatch")
+			assert.Equal(t, tt.expectedBurst, limiter.Burst(), "Burst mismatch")
 		})
 	}
 }
@@ -127,50 +113,58 @@ func (m *mockClient) GetMetricStatistics(_ context.Context, _ *slog.Logger, _ []
 	return nil
 }
 
-func TestPerAPIRateLimiter(t *testing.T) {
+func TestNewGlobalRateLimiter(t *testing.T) {
 	tests := []struct {
 		name                   string
-		listMetrics            *RateLimit
-		getMetricData          *RateLimit
-		getMetricStatistics    *RateLimit
+		config                 RateLimiterConfig
 		expectError            bool
 		expectedErrorSubstring string
 	}{
 		{
-			name:                "valid per-API limits",
-			listMetrics:         &RateLimit{Count: 5, Duration: time.Second},
-			getMetricData:       &RateLimit{Count: 10, Duration: time.Second},
-			getMetricStatistics: &RateLimit{Count: 15, Duration: time.Second},
-			expectError:         false,
+			name: "valid per-API limits",
+			config: RateLimiterConfig{
+				ListMetrics:         &APIRateLimit{Count: 5, Duration: time.Second},
+				GetMetricData:       &APIRateLimit{Count: 10, Duration: time.Second},
+				GetMetricStatistics: &APIRateLimit{Count: 15, Duration: time.Second},
+			},
+			expectError: false,
 		},
 		{
-			name:                "some empty limits",
-			listMetrics:         &RateLimit{Count: 5, Duration: time.Second},
-			getMetricData:       nil,
-			getMetricStatistics: &RateLimit{Count: 15, Duration: time.Second},
-			expectError:         false,
+			name: "some nil limits",
+			config: RateLimiterConfig{
+				ListMetrics:         &APIRateLimit{Count: 5, Duration: time.Second},
+				GetMetricData:       nil,
+				GetMetricStatistics: &APIRateLimit{Count: 15, Duration: time.Second},
+			},
+			expectError: false,
 		},
 		{
-			name:                   "invalid ListMetrics limit",
-			listMetrics:            &RateLimit{Count: 0, Duration: time.Second},
-			getMetricData:          &RateLimit{Count: 10, Duration: time.Second},
-			getMetricStatistics:    &RateLimit{Count: 15, Duration: time.Second},
+			name: "invalid ListMetrics limit",
+			config: RateLimiterConfig{
+				ListMetrics:         &APIRateLimit{Count: 0, Duration: time.Second},
+				GetMetricData:       &APIRateLimit{Count: 10, Duration: time.Second},
+				GetMetricStatistics: &APIRateLimit{Count: 15, Duration: time.Second},
+			},
 			expectError:            true,
 			expectedErrorSubstring: "invalid ListMetrics rate limit",
 		},
 		{
-			name:                   "invalid GetMetricData limit",
-			listMetrics:            &RateLimit{Count: 5, Duration: time.Second},
-			getMetricData:          &RateLimit{Count: 0, Duration: time.Second},
-			getMetricStatistics:    &RateLimit{Count: 15, Duration: time.Second},
+			name: "invalid GetMetricData limit",
+			config: RateLimiterConfig{
+				ListMetrics:         &APIRateLimit{Count: 5, Duration: time.Second},
+				GetMetricData:       &APIRateLimit{Count: 0, Duration: time.Second},
+				GetMetricStatistics: &APIRateLimit{Count: 15, Duration: time.Second},
+			},
 			expectError:            true,
 			expectedErrorSubstring: "invalid GetMetricData rate limit",
 		},
 		{
-			name:                   "invalid GetMetricStatistics limit",
-			listMetrics:            &RateLimit{Count: 5, Duration: time.Second},
-			getMetricData:          &RateLimit{Count: 10, Duration: time.Second},
-			getMetricStatistics:    &RateLimit{Count: 0, Duration: time.Second},
+			name: "invalid GetMetricStatistics limit",
+			config: RateLimiterConfig{
+				ListMetrics:         &APIRateLimit{Count: 5, Duration: time.Second},
+				GetMetricData:       &APIRateLimit{Count: 10, Duration: time.Second},
+				GetMetricStatistics: &APIRateLimit{Count: 0, Duration: time.Second},
+			},
 			expectError:            true,
 			expectedErrorSubstring: "invalid GetMetricStatistics rate limit",
 		},
@@ -178,27 +172,7 @@ func TestPerAPIRateLimiter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Build limiters map directly
-			limiters := make(map[string]*rate.Limiter)
-			apiLimits := map[string]*RateLimit{
-				listMetricsCall:         tt.listMetrics,
-				getMetricDataCall:       tt.getMetricData,
-				getMetricStatisticsCall: tt.getMetricStatistics,
-			}
-
-			var err error
-			for apiName, rateLimit := range apiLimits {
-				if rateLimit != nil {
-					limiter, buildErr := NewSingleAPIRateLimiter(apiName, rateLimit)
-					if buildErr != nil {
-						err = buildErr
-						break
-					}
-					if limiter != nil {
-						limiters[apiName] = limiter
-					}
-				}
-			}
+			limiter, err := NewGlobalRateLimiter(tt.config)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -207,77 +181,48 @@ func TestPerAPIRateLimiter(t *testing.T) {
 			}
 
 			require.NoError(t, err)
-
-			limiter := &perAPIRateLimiter{limiters: limiters}
-
-			ctx := context.Background()
-
-			// Test each API
-			apis := []string{listMetricsCall, getMetricDataCall, getMetricStatisticsCall}
-			for _, api := range apis {
-				// Test Allow method
-				allowed := limiter.Allow(api)
-				// Should be true for APIs with limits, or true for APIs without limits
-				assert.True(t, allowed, "First call to %s should be allowed", api)
-
-				// Test Wait method
-				err = limiter.Wait(ctx, api)
-				assert.NoError(t, err, "Wait for %s should not error", api)
-			}
-
-			// Test unknown API (should always be allowed)
-			allowed := limiter.Allow("UnknownAPI")
-			assert.True(t, allowed, "Unknown API should always be allowed")
-
-			err = limiter.Wait(ctx, "UnknownAPI")
-			assert.NoError(t, err, "Wait for unknown API should not error")
+			assert.NotNil(t, limiter)
 		})
 	}
 }
 
-func TestRateLimitedClientFromConfig(t *testing.T) {
+func TestNewRateLimitedClient(t *testing.T) {
 	mockClient := &mockClient{}
 
 	tests := []struct {
 		name          string
-		config        RateLimitConfig
+		config        RateLimiterConfig
 		expectWrapped bool
 	}{
 		{
-			name: "no rate limiting",
-			config: RateLimitConfig{
-				PerAPILimits: nil,
-			},
+			name:          "no rate limiting",
+			config:        RateLimiterConfig{},
 			expectWrapped: false,
 		},
 		{
 			name: "per-API rate limits",
-			config: RateLimitConfig{
-				PerAPILimits: map[string]*RateLimit{
-					listMetricsCall: {Count: 5, Duration: time.Second},
-				},
+			config: RateLimiterConfig{
+				ListMetrics: &APIRateLimit{Count: 5, Duration: time.Second},
 			},
 			expectWrapped: true,
-		},
-		{
-			name: "invalid per-API rate limit falls back to original",
-			config: RateLimitConfig{
-				PerAPILimits: nil, // No limiters = no wrapping
-			},
-			expectWrapped: false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := NewRateLimitedClientFromConfig(mockClient, tt.config)
+			var client Client
+			if tt.expectWrapped {
+				limiter, err := NewGlobalRateLimiter(tt.config)
+				require.NoError(t, err)
+				client = NewRateLimitedClient(mockClient, limiter, "us-east-1", "test-role")
+			} else {
+				client = NewRateLimitedClient(mockClient, nil, "us-east-1", "test-role")
+			}
 
 			if tt.expectWrapped {
-				// Should be wrapped
 				_, ok := client.(*SimpleRateLimitedClient)
 				assert.True(t, ok, "Client should be wrapped with rate limiting")
 			} else {
-				// Should be the original client
 				assert.Equal(t, mockClient, client, "Client should be the original unwrapped client")
 			}
 		})
@@ -287,21 +232,20 @@ func TestRateLimitedClientFromConfig(t *testing.T) {
 func TestRateLimitingBehavior(t *testing.T) {
 	mockClient := &mockClient{}
 
-	// Create a rate-limited client with a very low rate limit
-	config := RateLimitConfig{
-		PerAPILimits: map[string]*RateLimit{
-			listMetricsCall: {Count: 2, Duration: time.Second},
-		},
+	config := RateLimiterConfig{
+		ListMetrics: &APIRateLimit{Count: 2, Duration: time.Second},
 	}
 
-	client := NewRateLimitedClientFromConfig(mockClient, config)
+	limiter, err := NewGlobalRateLimiter(config)
+	require.NoError(t, err)
+	client := NewRateLimitedClient(mockClient, limiter, "us-east-1", "test-role")
 	ctx := context.Background()
 
 	// Make multiple calls quickly and measure timing
 	start := time.Now()
 
 	// First call should be immediate
-	err := client.ListMetrics(ctx, "test", nil, false, nil)
+	err = client.ListMetrics(ctx, "test", nil, false, nil)
 	assert.NoError(t, err)
 
 	// Second call should be immediate (burst)
@@ -325,21 +269,20 @@ func TestRateLimitingBehavior(t *testing.T) {
 func TestPerAPIRateLimitingBehavior(t *testing.T) {
 	mockClient := &mockClient{}
 
-	// Create a rate-limited client with different limits per API
-	config := RateLimitConfig{
-		PerAPILimits: map[string]*RateLimit{
-			listMetricsCall:         {Count: 1, Duration: time.Second},
-			getMetricDataCall:       {Count: 10, Duration: time.Second},
-			getMetricStatisticsCall: {Count: 5, Duration: time.Second},
-		},
+	config := RateLimiterConfig{
+		ListMetrics:         &APIRateLimit{Count: 1, Duration: time.Second},
+		GetMetricData:       &APIRateLimit{Count: 10, Duration: time.Second},
+		GetMetricStatistics: &APIRateLimit{Count: 5, Duration: time.Second},
 	}
 
-	client := NewRateLimitedClientFromConfig(mockClient, config)
+	limiter, err := NewGlobalRateLimiter(config)
+	require.NoError(t, err)
+	client := NewRateLimitedClient(mockClient, limiter, "us-east-1", "test-role")
 	ctx := context.Background()
 
 	// Test ListMetrics (most restrictive)
 	start := time.Now()
-	err := client.ListMetrics(ctx, "test", nil, false, nil)
+	err = client.ListMetrics(ctx, "test", nil, false, nil)
 	assert.NoError(t, err) // Should be immediate
 	err = client.ListMetrics(ctx, "test", nil, false, nil)
 	assert.NoError(t, err) // Should wait ~1 second
@@ -367,20 +310,20 @@ func TestPerAPIRateLimitingBehavior(t *testing.T) {
 func TestContextCancellation(t *testing.T) {
 	mockClient := &mockClient{}
 
-	config := RateLimitConfig{
-		PerAPILimits: map[string]*RateLimit{
-			listMetricsCall: {Count: 1, Duration: time.Minute},
-		},
+	config := RateLimiterConfig{
+		ListMetrics: &APIRateLimit{Count: 1, Duration: time.Minute},
 	}
 
-	client := NewRateLimitedClientFromConfig(mockClient, config)
+	limiter, err := NewGlobalRateLimiter(config)
+	require.NoError(t, err)
+	client := NewRateLimitedClient(mockClient, limiter, "us-east-1", "test-role")
 
 	// Create a context that will be cancelled quickly
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
 	// First call should work
-	err := client.ListMetrics(ctx, "test", nil, false, nil)
+	err = client.ListMetrics(ctx, "test", nil, false, nil)
 	assert.NoError(t, err)
 
 	// Second call should be cancelled due to context timeout
@@ -399,28 +342,26 @@ func TestContextCancellation(t *testing.T) {
 }
 
 func TestRateLimitingMetrics(t *testing.T) {
-	// Reset metrics before test
 	promutil.CloudwatchRateLimitWaitCounter.Reset()
 	promutil.CloudwatchRateLimitAllowedCounter.Reset()
 
 	mockClient := &mockClient{}
 
-	// Create a rate-limited client with a very low rate limit
-	config := RateLimitConfig{
-		PerAPILimits: map[string]*RateLimit{
-			listMetricsCall: {Count: 1, Duration: time.Second},
-		},
+	config := RateLimiterConfig{
+		ListMetrics: &APIRateLimit{Count: 1, Duration: time.Second},
 	}
 
-	client := NewRateLimitedClientFromConfig(mockClient, config)
+	limiter, err := NewGlobalRateLimiter(config)
+	require.NoError(t, err)
+	client := NewRateLimitedClient(mockClient, limiter, "us-east-1", "test-role")
 	ctx := context.Background()
 
 	// First call should be allowed immediately
-	err := client.ListMetrics(ctx, "test", nil, false, nil)
+	err = client.ListMetrics(ctx, "test", nil, false, nil)
 	assert.NoError(t, err)
 
 	// Check that allowed counter was incremented
-	allowedCount := testutil.ToFloat64(promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(listMetricsCall))
+	allowedCount := testutil.ToFloat64(promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(listMetricsCall, "us-east-1", "test-role", "test"))
 	assert.Equal(t, float64(1), allowedCount, "First call should be counted as allowed")
 
 	// Second call should be rate limited (will wait)
@@ -433,7 +374,7 @@ func TestRateLimitingMetrics(t *testing.T) {
 	assert.True(t, elapsed >= 800*time.Millisecond, "Second call should have been rate limited")
 
 	// Check that wait counter was incremented
-	waitCount := testutil.ToFloat64(promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(listMetricsCall))
+	waitCount := testutil.ToFloat64(promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(listMetricsCall, "us-east-1", "test-role", "test"))
 	assert.Equal(t, float64(1), waitCount, "Second call should be counted as rate limited")
 
 	// Verify both calls were made
@@ -441,25 +382,23 @@ func TestRateLimitingMetrics(t *testing.T) {
 }
 
 func TestPerAPIRateLimitingMetrics(t *testing.T) {
-	// Reset metrics before test
 	promutil.CloudwatchRateLimitWaitCounter.Reset()
 	promutil.CloudwatchRateLimitAllowedCounter.Reset()
 
 	mockClient := &mockClient{}
 
-	// Create a rate-limited client with different limits per API
-	config := RateLimitConfig{
-		PerAPILimits: map[string]*RateLimit{
-			listMetricsCall:   {Count: 1, Duration: time.Second},
-			getMetricDataCall: {Count: 10, Duration: time.Second},
-		},
+	config := RateLimiterConfig{
+		ListMetrics:   &APIRateLimit{Count: 1, Duration: time.Second},
+		GetMetricData: &APIRateLimit{Count: 10, Duration: time.Second},
 	}
 
-	client := NewRateLimitedClientFromConfig(mockClient, config)
+	limiter, err := NewGlobalRateLimiter(config)
+	require.NoError(t, err)
+	client := NewRateLimitedClient(mockClient, limiter, "us-east-1", "test-role")
 	ctx := context.Background()
 
 	// Test ListMetrics (restrictive)
-	err := client.ListMetrics(ctx, "test", nil, false, nil)
+	err = client.ListMetrics(ctx, "test", nil, false, nil)
 	assert.NoError(t, err) // Should be allowed
 	err = client.ListMetrics(ctx, "test", nil, false, nil)
 	assert.NoError(t, err) // Should be rate limited
@@ -469,14 +408,14 @@ func TestPerAPIRateLimitingMetrics(t *testing.T) {
 	client.GetMetricData(ctx, nil, "test", time.Now(), time.Now()) // Should also be allowed
 
 	// Check ListMetrics metrics
-	listAllowedCount := testutil.ToFloat64(promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(listMetricsCall))
-	listWaitCount := testutil.ToFloat64(promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(listMetricsCall))
+	listAllowedCount := testutil.ToFloat64(promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(listMetricsCall, "us-east-1", "test-role", "test"))
+	listWaitCount := testutil.ToFloat64(promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(listMetricsCall, "us-east-1", "test-role", "test"))
 	assert.Equal(t, float64(1), listAllowedCount, "ListMetrics should have 1 allowed call")
 	assert.Equal(t, float64(1), listWaitCount, "ListMetrics should have 1 rate limited call")
 
 	// Check GetMetricData metrics
-	dataAllowedCount := testutil.ToFloat64(promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(getMetricDataCall))
-	dataWaitCount := testutil.ToFloat64(promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(getMetricDataCall))
+	dataAllowedCount := testutil.ToFloat64(promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(getMetricDataCall, "us-east-1", "test-role", "test"))
+	dataWaitCount := testutil.ToFloat64(promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(getMetricDataCall, "us-east-1", "test-role", "test"))
 	assert.Equal(t, float64(2), dataAllowedCount, "GetMetricData should have 2 allowed calls")
 	assert.Equal(t, float64(0), dataWaitCount, "GetMetricData should have 0 rate limited calls")
 
