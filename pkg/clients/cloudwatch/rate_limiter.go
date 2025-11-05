@@ -87,7 +87,8 @@ func NewRateLimitedClient(client Client, globalLimiter *GlobalRateLimiter, regio
 	if globalLimiter == nil {
 		return client
 	}
-	return &SimpleRateLimitedClient{Client: client,
+	return &SimpleRateLimitedClient{
+		Client:  client,
 		limiter: globalLimiter,
 		region:  region,
 		role:    role,
