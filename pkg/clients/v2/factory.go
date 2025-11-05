@@ -183,7 +183,7 @@ func (c *CachingFactory) GetCloudwatchClient(region string, role model.Role, con
 
 	// Apply global rate limiter if provided
 	if globalRateLimiter != nil {
-		client = cloudwatch_client.NewRateLimitedClient(client, globalRateLimiter)
+		client = cloudwatch_client.NewRateLimitedClient(client, globalRateLimiter, region, role.RoleArn)
 	}
 
 	c.clients[role][region].cloudwatch = client

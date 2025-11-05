@@ -83,47 +83,53 @@ func createLimiter(cfg *APIRateLimit) (*rate.Limiter, error) {
 	return rate.NewLimiter(rate.Limit(ratePerSecond), cfg.Count), nil
 }
 
-func NewRateLimitedClient(client Client, globalLimiter *GlobalRateLimiter) Client {
+func NewRateLimitedClient(client Client, globalLimiter *GlobalRateLimiter, region string, role string) Client {
 	if globalLimiter == nil {
 		return client
 	}
-	return &SimpleRateLimitedClient{Client: client, limiter: globalLimiter}
+	return &SimpleRateLimitedClient{Client: client,
+		limiter: globalLimiter,
+		region:  region,
+		role:    role,
+	}
 }
 
 type SimpleRateLimitedClient struct {
 	Client  Client
 	limiter *GlobalRateLimiter
+	region  string
+	role    string
 }
 
 func (c *SimpleRateLimitedClient) ListMetrics(ctx context.Context, namespace string, metric *model.MetricConfig, recentlyActiveOnly bool, fn func(page []*model.Metric)) error {
-	if err := c.limit(ctx, c.limiter.listMetrics, listMetricsCall); err != nil {
+	if err := c.limit(ctx, c.limiter.listMetrics, listMetricsCall, c.region, c.role, namespace); err != nil {
 		return err
 	}
 	return c.Client.ListMetrics(ctx, namespace, metric, recentlyActiveOnly, fn)
 }
 
 func (c *SimpleRateLimitedClient) GetMetricData(ctx context.Context, getMetricData []*model.CloudwatchData, namespace string, startTime time.Time, endTime time.Time) []MetricDataResult {
-	if err := c.limit(ctx, c.limiter.getMetricData, getMetricDataCall); err != nil {
+	if err := c.limit(ctx, c.limiter.getMetricData, getMetricDataCall, c.region, c.role, namespace); err != nil {
 		return nil
 	}
 	return c.Client.GetMetricData(ctx, getMetricData, namespace, startTime, endTime)
 }
 
 func (c *SimpleRateLimitedClient) GetMetricStatistics(ctx context.Context, logger *slog.Logger, dimensions []model.Dimension, namespace string, metric *model.MetricConfig) []*model.MetricStatisticsResult {
-	if err := c.limit(ctx, c.limiter.getMetricStatistics, getMetricStatisticsCall); err != nil {
+	if err := c.limit(ctx, c.limiter.getMetricStatistics, getMetricStatisticsCall, c.region, c.role, namespace); err != nil {
 		return nil
 	}
 	return c.Client.GetMetricStatistics(ctx, logger, dimensions, namespace, metric)
 }
 
-func (c *SimpleRateLimitedClient) limit(ctx context.Context, limiter *rate.Limiter, apiName string) error {
+func (c *SimpleRateLimitedClient) limit(ctx context.Context, limiter *rate.Limiter, apiName string, region string, role string, namespace string) error {
 	if limiter == nil {
 		return nil
 	}
 	if limiter.Allow() {
-		promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(apiName).Inc()
+		promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(apiName, region, role, namespace).Inc()
 		return nil
 	}
-	promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(apiName).Inc()
+	promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(apiName, region, role, namespace).Inc()
 	return limiter.Wait(ctx)
 }
