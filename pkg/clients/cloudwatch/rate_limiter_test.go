@@ -214,9 +214,9 @@ func TestNewRateLimitedClient(t *testing.T) {
 			if tt.expectWrapped {
 				limiter, err := NewGlobalRateLimiter(tt.config)
 				require.NoError(t, err)
-				client = NewRateLimitedClient(mockClient, limiter)
+				client = NewRateLimitedClient(mockClient, limiter, "us-east-1", "test-role")
 			} else {
-				client = NewRateLimitedClient(mockClient, nil)
+				client = NewRateLimitedClient(mockClient, nil, "us-east-1", "test-role")
 			}
 
 			if tt.expectWrapped {
@@ -238,7 +238,7 @@ func TestRateLimitingBehavior(t *testing.T) {
 
 	limiter, err := NewGlobalRateLimiter(config)
 	require.NoError(t, err)
-	client := NewRateLimitedClient(mockClient, limiter)
+	client := NewRateLimitedClient(mockClient, limiter, "us-east-1", "test-role")
 	ctx := context.Background()
 
 	// Make multiple calls quickly and measure timing
@@ -277,7 +277,7 @@ func TestPerAPIRateLimitingBehavior(t *testing.T) {
 
 	limiter, err := NewGlobalRateLimiter(config)
 	require.NoError(t, err)
-	client := NewRateLimitedClient(mockClient, limiter)
+	client := NewRateLimitedClient(mockClient, limiter, "us-east-1", "test-role")
 	ctx := context.Background()
 
 	// Test ListMetrics (most restrictive)
@@ -316,7 +316,7 @@ func TestContextCancellation(t *testing.T) {
 
 	limiter, err := NewGlobalRateLimiter(config)
 	require.NoError(t, err)
-	client := NewRateLimitedClient(mockClient, limiter)
+	client := NewRateLimitedClient(mockClient, limiter, "us-east-1", "test-role")
 
 	// Create a context that will be cancelled quickly
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -353,7 +353,7 @@ func TestRateLimitingMetrics(t *testing.T) {
 
 	limiter, err := NewGlobalRateLimiter(config)
 	require.NoError(t, err)
-	client := NewRateLimitedClient(mockClient, limiter)
+	client := NewRateLimitedClient(mockClient, limiter, "us-east-1", "test-role")
 	ctx := context.Background()
 
 	// First call should be allowed immediately
@@ -361,7 +361,7 @@ func TestRateLimitingMetrics(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Check that allowed counter was incremented
-	allowedCount := testutil.ToFloat64(promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(listMetricsCall))
+	allowedCount := testutil.ToFloat64(promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(listMetricsCall, "us-east-1", "test-role", "test"))
 	assert.Equal(t, float64(1), allowedCount, "First call should be counted as allowed")
 
 	// Second call should be rate limited (will wait)
@@ -374,7 +374,7 @@ func TestRateLimitingMetrics(t *testing.T) {
 	assert.True(t, elapsed >= 800*time.Millisecond, "Second call should have been rate limited")
 
 	// Check that wait counter was incremented
-	waitCount := testutil.ToFloat64(promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(listMetricsCall))
+	waitCount := testutil.ToFloat64(promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(listMetricsCall, "us-east-1", "test-role", "test"))
 	assert.Equal(t, float64(1), waitCount, "Second call should be counted as rate limited")
 
 	// Verify both calls were made
@@ -394,7 +394,7 @@ func TestPerAPIRateLimitingMetrics(t *testing.T) {
 
 	limiter, err := NewGlobalRateLimiter(config)
 	require.NoError(t, err)
-	client := NewRateLimitedClient(mockClient, limiter)
+	client := NewRateLimitedClient(mockClient, limiter, "us-east-1", "test-role")
 	ctx := context.Background()
 
 	// Test ListMetrics (restrictive)
@@ -408,14 +408,14 @@ func TestPerAPIRateLimitingMetrics(t *testing.T) {
 	client.GetMetricData(ctx, nil, "test", time.Now(), time.Now()) // Should also be allowed
 
 	// Check ListMetrics metrics
-	listAllowedCount := testutil.ToFloat64(promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(listMetricsCall))
-	listWaitCount := testutil.ToFloat64(promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(listMetricsCall))
+	listAllowedCount := testutil.ToFloat64(promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(listMetricsCall, "us-east-1", "test-role", "test"))
+	listWaitCount := testutil.ToFloat64(promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(listMetricsCall, "us-east-1", "test-role", "test"))
 	assert.Equal(t, float64(1), listAllowedCount, "ListMetrics should have 1 allowed call")
 	assert.Equal(t, float64(1), listWaitCount, "ListMetrics should have 1 rate limited call")
 
 	// Check GetMetricData metrics
-	dataAllowedCount := testutil.ToFloat64(promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(getMetricDataCall))
-	dataWaitCount := testutil.ToFloat64(promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(getMetricDataCall))
+	dataAllowedCount := testutil.ToFloat64(promutil.CloudwatchRateLimitAllowedCounter.WithLabelValues(getMetricDataCall, "us-east-1", "test-role", "test"))
+	dataWaitCount := testutil.ToFloat64(promutil.CloudwatchRateLimitWaitCounter.WithLabelValues(getMetricDataCall, "us-east-1", "test-role", "test"))
 	assert.Equal(t, float64(2), dataAllowedCount, "GetMetricData should have 2 allowed calls")
 	assert.Equal(t, float64(0), dataWaitCount, "GetMetricData should have 0 rate limited calls")
 
