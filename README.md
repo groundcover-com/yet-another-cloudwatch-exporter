@@ -102,6 +102,7 @@ Only the latest version gets security updates. We won't support older versions.
   * `AWS/KinesisAnalytics` - Kinesis Data Analytics for SQL Applications
   * `AWS/KMS` - Key Management Service
   * `AWS/Lambda` - Lambda Functions
+  * `LambdaInsights` - Lambda Insights (enhanced Lambda monitoring)
   * `AWS/Logs` - CloudWatch Logs
   * `AWS/MediaConnect` - AWS Elemental MediaConnect
   * `AWS/MediaConvert` - AWS Elemental MediaConvert
