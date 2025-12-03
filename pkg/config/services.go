@@ -36,7 +36,8 @@ type ServiceConfig struct {
 	// extract dimensions names from a resource ARN. The regex should
 	// use named groups that correspond to AWS dimensions names.
 	// In cases where the dimension name has a space, it should be
-	// replaced with an underscore (`_`).
+	// replaced with an underscore (`_`). For a literal underscore
+	// in the dimension name, use double underscore (`__`).
 	DimensionRegexps []*regexp.Regexp
 }
 
@@ -49,8 +50,7 @@ func (sc ServiceConfig) ToModelDimensionsRegexp() []model.DimensionsRegexp {
 
 		// skip first name, it's always an empty string
 		for i := 1; i < len(names); i++ {
-			// in the regex names we use underscores where AWS dimensions have spaces
-			dimensionNames = append(dimensionNames, strings.ReplaceAll(names[i], "_", " "))
+			dimensionNames = append(dimensionNames, regexSubexpNameToDimensionName(names[i]))
 		}
 
 		dr = append(dr, model.DimensionsRegexp{
@@ -60,6 +60,21 @@ func (sc ServiceConfig) ToModelDimensionsRegexp() []model.DimensionsRegexp {
 	}
 
 	return dr
+}
+
+// regexSubexpNameToDimensionName converts a regex named group to an AWS dimension name.
+// Single underscore (_) becomes space, for dimensions like "Directory ID".
+// Double underscore (__) becomes literal underscore, for dimensions like "function_name".
+func regexSubexpNameToDimensionName(name string) string {
+	if !strings.Contains(name, "__") {
+		return strings.ReplaceAll(name, "_", " ")
+	}
+	// Split by __, convert _ to space in each part, rejoin with _
+	parts := strings.Split(name, "__")
+	for i, part := range parts {
+		parts[i] = strings.ReplaceAll(part, "_", " ")
+	}
+	return strings.Join(parts, "_")
 }
 
 type serviceConfigs []ServiceConfig
@@ -623,6 +638,17 @@ var SupportedServices = serviceConfigs{
 		},
 		DimensionRegexps: []*regexp.Regexp{
 			regexp.MustCompile(":function:(?P<FunctionName>[^/]+)"),
+		},
+	},
+	{
+		Namespace: "LambdaInsights",
+		Alias:     "lambdainsights",
+		ResourceFilters: []*string{
+			aws.String("lambda:function"),
+		},
+		DimensionRegexps: []*regexp.Regexp{
+			regexp.MustCompile(":function:(?P<function__name>[^:/]+):(?P<version>.+)$"),
+			regexp.MustCompile(":function:(?P<function__name>[^:/]+)$"),
 		},
 	},
 	{
