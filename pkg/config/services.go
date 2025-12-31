@@ -162,6 +162,9 @@ var SupportedServices = serviceConfigs{
 		ResourceFilters: []*string{
 			aws.String("backup"),
 		},
+		DimensionRegexps: []*regexp.Regexp{
+			regexp.MustCompile(":backup-vault:(?P<BackupVaultName>[^:]+)"),
+		},
 	},
 	{
 		Namespace: "AWS/ApiGateway",
@@ -1085,6 +1088,20 @@ var SupportedServices = serviceConfigs{
 	{
 		Namespace: "AWS/Bedrock",
 		Alias:     "bedrock",
+	},
+	{
+		Namespace: "AWS/Bedrock/Agents",
+		Alias:     "bedrock-agents",
+		ResourceFilters: []*string{
+			aws.String("bedrock:agent-alias"),
+		},
+		DimensionRegexps: []*regexp.Regexp{
+			regexp.MustCompile("(?P<AgentAliasArn>.+)"),
+		},
+	},
+	{
+		Namespace: "AWS/Bedrock/Guardrails",
+		Alias:     "bedrock-guardrails",
 		ResourceFilters: []*string{
 			aws.String("bedrock:guardrail"),
 		},
