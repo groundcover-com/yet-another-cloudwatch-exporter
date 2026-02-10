@@ -85,7 +85,7 @@ func TestTimeseriesCache_GetSet(t *testing.T) {
 
 	cache.Set(key, TimeseriesCacheEntry{
 		LastTimestamp: ts,
-		Interval:     60,
+		Interval:      60,
 	})
 
 	entry, ok := cache.Get(key)
@@ -101,7 +101,7 @@ func TestTimeseriesCache_TTLExpiry(t *testing.T) {
 	key := BuildCacheKey("test", "metric", []model.Dimension{{Name: "dim", Value: "val"}}, "Average")
 	cache.Set(key, TimeseriesCacheEntry{
 		LastTimestamp: time.Now(),
-		Interval:     60,
+		Interval:      60,
 	})
 
 	_, ok := cache.Get(key)
