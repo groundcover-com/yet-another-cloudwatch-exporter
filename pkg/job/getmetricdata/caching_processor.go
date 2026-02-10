@@ -177,9 +177,10 @@ func (cp *CachingProcessor) applySteadyStateWindow(req *model.CloudwatchData, pe
 // applyGapRecoveryWindow sets an extended window to recover missed data after a gap.
 // Uses delay=0 to reach as close to "now" as possible, with length capped at maxLength.
 func (cp *CachingProcessor) applyGapRecoveryWindow(req *model.CloudwatchData, namespace string, period, timeSinceSeconds, maxLength int64) {
+	promutil.TimeseriesCacheGapDetectedCounter.Inc()
 	neededLength := timeSinceSeconds + period
 	if neededLength > maxLength {
-		promutil.TimeseriesCacheGapDetectedCounter.Inc()
+		promutil.TimeseriesCacheGapCappedCounter.Inc()
 		cp.logger.Warn("[GAP_CAPPED] lookback capped at max",
 			"namespace", namespace,
 			"metric", req.MetricName,

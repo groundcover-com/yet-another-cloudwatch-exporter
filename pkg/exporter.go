@@ -179,7 +179,7 @@ func WithTimeseriesCache(cache *getmetricdata.TimeseriesCache) OptionsFunc {
 
 // WithCacheMinPeriods sets the minimum number of periods to look back when fetching
 // metrics via GetMetricData. This ensures CloudWatch has had enough time to populate
-// the metric bucket. Default is 5.
+// the metric bucket. Default is 1.
 func WithCacheMinPeriods(n int64) OptionsFunc {
 	return func(o *options) error {
 		if n <= 0 {

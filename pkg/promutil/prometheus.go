@@ -105,6 +105,10 @@ var (
 		Name: "yace_timeseries_cache_gap_detections_total",
 		Help: "Number of times a gap was detected in the timeseries cache, triggering extended lookback",
 	})
+	TimeseriesCacheGapCappedCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "yace_timeseries_cache_gap_capped_total",
+		Help: "Number of times a gap recovery lookback was capped at MaxPeriods",
+	})
 	TimeseriesEmptyScrapeCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "yace_timeseries_empty_scrapes_total",
 		Help: "Number of scrapes that returned 0 new datapoints for a tracked timeseries (potential gap)",
