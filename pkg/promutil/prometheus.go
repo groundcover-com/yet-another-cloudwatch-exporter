@@ -93,6 +93,26 @@ var (
 		Name: "yace_cloudwatch_rate_limit_allowed_total",
 		Help: "Number of requests that were allowed immediately (not rate limited)",
 	}, []string{"api_name", "region", "role", "namespace"})
+	TimeseriesCacheHitCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "yace_timeseries_cache_hits_total",
+		Help: "Number of timeseries cache hits during GetMetricData pre-processing",
+	})
+	TimeseriesCacheMissCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "yace_timeseries_cache_misses_total",
+		Help: "Number of timeseries cache misses during GetMetricData pre-processing",
+	})
+	TimeseriesCacheGapDetectedCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "yace_timeseries_cache_gap_detections_total",
+		Help: "Number of times a gap was detected in the timeseries cache, triggering extended lookback",
+	})
+	TimeseriesEmptyScrapeCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "yace_timeseries_empty_scrapes_total",
+		Help: "Number of scrapes that returned 0 new datapoints for a tracked timeseries (potential gap)",
+	}, []string{"namespace", "metric_name", "statistic"})
+	TimeseriesDedupCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "yace_timeseries_dedup_filtered_total",
+		Help: "Number of duplicate data points filtered by the timeseries cache",
+	})
 )
 
 var replacer = strings.NewReplacer(

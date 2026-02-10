@@ -36,6 +36,8 @@ func ScrapeAwsData(
 	globalRateLimiter *cloudwatch.GlobalRateLimiter,
 	taggingAPIConcurrency int,
 	store resourceinventory.Store,
+	tsCache *getmetricdata.TimeseriesCache,
+	cachingConfig getmetricdata.CachingProcessorConfig,
 ) ([]model.TaggedResourceResult, []model.CloudwatchMetricResult) {
 	mux := &sync.Mutex{}
 	cwData := make([]model.CloudwatchMetricResult, 0)
@@ -64,9 +66,13 @@ func ScrapeAwsData(
 					cloudwatchClient := factory.GetCloudwatchClient(region, role, cloudwatchConcurrency, globalRateLimiter)
 					jobLogger.Info("Starting discovery job")
 					gmdProcessor := getmetricdata.NewDefaultProcessor(logger, cloudwatchClient, metricsPerQuery, cloudwatchConcurrency.GetMetricData)
+					var processor getMetricDataProcessor = gmdProcessor
+					if tsCache != nil {
+						processor = getmetricdata.NewCachingProcessor(jobLogger, gmdProcessor, tsCache, cachingConfig)
+					}
 					taggingClient := tagging.WithExternalStore(jobLogger, factory.GetTaggingClient(region, role, taggingAPIConcurrency), store)
 
-					resources, metrics := runDiscoveryJob(ctx, jobLogger, discoveryJob, region, taggingClient, cloudwatchClient, gmdProcessor)
+					resources, metrics := runDiscoveryJob(ctx, jobLogger, discoveryJob, region, taggingClient, cloudwatchClient, processor)
 					addDataToOutput := len(metrics) != 0
 					if config.FlagsFromCtx(ctx).IsFeatureEnabled(config.AlwaysReturnInfoMetrics) {
 						addDataToOutput = addDataToOutput || len(resources) != 0
@@ -157,7 +163,11 @@ func ScrapeAwsData(
 
 					cloudwatchClient := factory.GetCloudwatchClient(region, role, cloudwatchConcurrency, globalRateLimiter)
 					gmdProcessor := getmetricdata.NewDefaultProcessor(logger, cloudwatchClient, metricsPerQuery, cloudwatchConcurrency.GetMetricData)
-					metrics := runCustomNamespaceJob(ctx, jobLogger, customNamespaceJob, cloudwatchClient, gmdProcessor)
+					var processor getMetricDataProcessor = gmdProcessor
+					if tsCache != nil {
+						processor = getmetricdata.NewCachingProcessor(jobLogger, gmdProcessor, tsCache, cachingConfig)
+					}
+					metrics := runCustomNamespaceJob(ctx, jobLogger, customNamespaceJob, cloudwatchClient, processor)
 					metricResult := model.CloudwatchMetricResult{
 						Context: &model.ScrapeContext{
 							Region:       region,
