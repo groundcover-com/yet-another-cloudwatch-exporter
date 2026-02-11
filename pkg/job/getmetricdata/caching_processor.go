@@ -207,7 +207,7 @@ func (cp *CachingProcessor) deduplicateAndUpdateCache(namespace string, results 
 		}
 
 		totalRaw := len(result.GetMetricDataResult.DataPoints)
-		newCount := cp.deduplicateDataPoints(result, meta)
+		newCount := cp.filterSeenDataPoints(result, meta)
 
 		if newCount == 0 && totalRaw == 0 {
 			cp.detectActualGap(namespace, result, meta)
@@ -217,9 +217,9 @@ func (cp *CachingProcessor) deduplicateAndUpdateCache(namespace string, results 
 	}
 }
 
-// deduplicateDataPoints filters out datapoints at or before the cached timestamp.
-// Returns the count of new (non-duplicate) points.
-func (cp *CachingProcessor) deduplicateDataPoints(result *model.CloudwatchData, meta requestMetadata) int {
+// filterSeenDataPoints filters out datapoints at or before the cached timestamp.
+// Returns the count of new (not previously seen) points.
+func (cp *CachingProcessor) filterSeenDataPoints(result *model.CloudwatchData, meta requestMetadata) int {
 	cached, hasCached := cp.cache.Get(meta.cacheKey)
 	if !hasCached {
 		return len(result.GetMetricDataResult.DataPoints)
