@@ -181,7 +181,9 @@ func (cp *CachingProcessor) adjustRequestWindows(namespace string, requests []*m
 
 		promutil.TimeseriesCacheHitCounter.Inc()
 
-		timeSinceSeconds := int64(now.Sub(cached.LastTimestamp).Seconds())
+		periodDuration := time.Duration(period) * time.Second
+		roundedNow := now.Truncate(periodDuration)
+		timeSinceSeconds := int64(roundedNow.Sub(cached.LastTimestamp).Seconds())
 		if timeSinceSeconds <= steadyStateThreshold(period) {
 			cp.applySteadyStateWindow(req, period)
 		} else {
