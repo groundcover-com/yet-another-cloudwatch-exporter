@@ -109,13 +109,13 @@ var (
 		Name: "yace_timeseries_cache_gap_capped_total",
 		Help: "Number of times a gap recovery lookback was capped at MaxPeriods",
 	})
-	TimeseriesEmptyScrapeCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "yace_timeseries_empty_scrapes_total",
-		Help: "Number of scrapes that returned 0 new datapoints for a tracked timeseries (potential gap)",
-	}, []string{"namespace", "metric_name", "statistic"})
 	TimeseriesDedupCounter = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "yace_timeseries_dedup_filtered_total",
 		Help: "Number of duplicate data points filtered by the timeseries cache",
+	})
+	TimeseriesGapFillPointsCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "yace_timeseries_gap_fill_points_total",
+		Help: "Number of NaN data points injected for missing periods to kill staleness",
 	})
 )
 

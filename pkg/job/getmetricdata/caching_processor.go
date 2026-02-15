@@ -15,16 +15,12 @@ package getmetricdata
 import (
 	"context"
 	"log/slog"
+	"math"
 	"time"
 
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/model"
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/promutil"
 )
-
-// maxSteadyStateDelay is the maximum delay (in seconds) applied to steady-state queries.
-// CloudWatch publishing delay is ~2-10 minutes regardless of metric period, so there's
-// no need to shift the window further back for large-period metrics (5m, 1h, 24h).
-const maxSteadyStateDelay int64 = 600
 
 // steadyStateMultiplier defines how many periods of timeSince are considered "steady state".
 // With CW publishing delay (~2min) and our delay offset, cached_last is typically 2-3 periods
@@ -46,6 +42,12 @@ type CachingProcessorConfig struct {
 	// large queries after long outages while still recovering short gaps.
 	// Default: 5
 	MaxPeriods int64
+
+	// GapValue, when non-nil, is the value emitted at cachedLastTimestamp + period
+	// when CloudWatch returns zero data points for a cached series (gap termination).
+	// Callers typically pass a pointer to decimal.StaleNaN for VictoriaMetrics.
+	// Default: nil (no gap value emitted).
+	GapValue *float64
 }
 
 // DefaultCachingProcessorConfig returns a CachingProcessorConfig with sensible defaults.
@@ -104,17 +106,46 @@ func (cp *CachingProcessor) Run(ctx context.Context, namespace string, requests 
 		return nil, err
 	}
 
-	cp.deduplicateAndUpdateCache(namespace, results, metadata)
+	cp.deduplicateAndUpdateCache(results, metadata)
 
 	return results, nil
 }
 
-// cappedDelay returns the delay for a given period, capped at maxSteadyStateDelay.
-func cappedDelay(period int64) int64 {
-	if period > maxSteadyStateDelay {
-		return maxSteadyStateDelay
+// effectiveMaxPeriods returns the maximum number of lookback periods based on the metric
+// period. Short-period metrics can afford more lookback; long-period metrics are capped lower
+// to avoid expensive queries.
+//
+//	Period 1-3 min  (60-180s)  → 10 periods
+//	Period 4-10 min (240-600s) → 5  periods
+//	Period > 10 min (>600s)    → 2  periods
+func effectiveMaxPeriods(periodSeconds int64) int64 {
+	switch {
+	case periodSeconds <= 180: // 1-3 minutes
+		return 10
+	case periodSeconds <= 600: // 4-10 minutes
+		return 5
+	default: // > 10 minutes
+		return 2
 	}
-	return period
+}
+
+// effectiveDelay returns the query delay (in seconds) based on the metric period.
+// Short-period metrics need more delay because CloudWatch publishing latency (~2 min)
+// is significant relative to their period. Long-period metrics don't need delay since
+// the data is already well in the past by the time we query.
+//
+//	Period 1-3 min  (60-180s)  → 120s (2 minutes)
+//	Period 3-10 min (181-600s) → 1 period
+//	Period > 10 min (>600s)    → 0
+func effectiveDelay(periodSeconds int64) int64 {
+	switch {
+	case periodSeconds <= 180: // 1-3 minutes
+		return 120
+	case periodSeconds <= 600: // 3-10 minutes
+		return periodSeconds
+	default: // > 10 minutes
+		return 0
+	}
 }
 
 // adjustRequestWindows sets the Length and Delay on each request based on cached state.
@@ -151,7 +182,8 @@ func (cp *CachingProcessor) adjustRequestWindows(namespace string, requests []*m
 		if timeSinceSeconds <= steadyStateMultiplier*period {
 			cp.applySteadyStateWindow(req, period)
 		} else {
-			cp.applyGapRecoveryWindow(req, namespace, period, timeSinceSeconds, period*cp.config.MaxPeriods)
+			maxPeriods := effectiveMaxPeriods(period)
+			cp.applyGapRecoveryWindow(req, namespace, period, timeSinceSeconds, period*maxPeriods)
 		}
 	}
 
@@ -162,7 +194,7 @@ func (cp *CachingProcessor) adjustRequestWindows(namespace string, requests []*m
 // Uses MinPeriods lookback with a capped delay to fetch guaranteed-published data.
 func (cp *CachingProcessor) applyColdStartWindow(req *model.CloudwatchData, period int64) {
 	req.GetMetricDataProcessingParams.Length = period * cp.config.MinPeriods
-	req.GetMetricDataProcessingParams.Delay = cappedDelay(period)
+	req.GetMetricDataProcessingParams.Delay = effectiveDelay(period)
 }
 
 // applySteadyStateWindow sets a tight 1-period window with delay for normal operation.
@@ -171,7 +203,7 @@ func (cp *CachingProcessor) applyColdStartWindow(req *model.CloudwatchData, peri
 // between consecutive scrapes (zero dedup waste).
 func (cp *CachingProcessor) applySteadyStateWindow(req *model.CloudwatchData, period int64) {
 	req.GetMetricDataProcessingParams.Length = period
-	req.GetMetricDataProcessingParams.Delay = cappedDelay(period)
+	req.GetMetricDataProcessingParams.Delay = effectiveDelay(period)
 }
 
 // applyGapRecoveryWindow sets an extended window to recover missed data after a gap.
@@ -194,8 +226,9 @@ func (cp *CachingProcessor) applyGapRecoveryWindow(req *model.CloudwatchData, na
 	req.GetMetricDataProcessingParams.Delay = 0
 }
 
-// deduplicateAndUpdateCache filters out already-seen datapoints and advances the cache.
-func (cp *CachingProcessor) deduplicateAndUpdateCache(namespace string, results []*model.CloudwatchData, metadata map[*model.CloudwatchData]requestMetadata) {
+// deduplicateAndUpdateCache filters out already-seen datapoints, generates NaN gap-fill
+// points for missing periods, and advances the cache.
+func (cp *CachingProcessor) deduplicateAndUpdateCache(results []*model.CloudwatchData, metadata map[*model.CloudwatchData]requestMetadata) {
 	for _, result := range results {
 		if result.GetMetricDataResult == nil {
 			continue
@@ -206,23 +239,17 @@ func (cp *CachingProcessor) deduplicateAndUpdateCache(namespace string, results 
 			continue
 		}
 
-		totalRaw := len(result.GetMetricDataResult.DataPoints)
-		newCount := cp.filterSeenDataPoints(result, meta)
-
-		if newCount == 0 && totalRaw == 0 {
-			cp.detectActualGap(namespace, result, meta)
-		}
-
+		cp.filterSeenDataPoints(result, meta)
+		cp.fillGapsWithNaN(result, meta)
 		cp.updateCacheFromResult(result, meta)
 	}
 }
 
 // filterSeenDataPoints filters out datapoints at or before the cached timestamp.
-// Returns the count of new (not previously seen) points.
-func (cp *CachingProcessor) filterSeenDataPoints(result *model.CloudwatchData, meta requestMetadata) int {
+func (cp *CachingProcessor) filterSeenDataPoints(result *model.CloudwatchData, meta requestMetadata) {
 	cached, hasCached := cp.cache.Get(meta.cacheKey)
 	if !hasCached {
-		return len(result.GetMetricDataResult.DataPoints)
+		return
 	}
 
 	totalRaw := len(result.GetMetricDataResult.DataPoints)
@@ -238,29 +265,51 @@ func (cp *CachingProcessor) filterSeenDataPoints(result *model.CloudwatchData, m
 	}
 
 	result.GetMetricDataResult.DataPoints = filtered
-	return len(filtered)
 }
 
-// detectActualGap checks if a zero-datapoint result represents a genuine CloudWatch gap
-// (as opposed to a metric that simply hasn't been published yet).
-func (cp *CachingProcessor) detectActualGap(namespace string, result *model.CloudwatchData, meta requestMetadata) {
+// fillGapsWithNaN injects a single gap-value data point at cachedLastTimestamp + period
+// when a gap is detected and CloudWatch returned zero real data points after deduplication.
+// The value used is provided by the caller via CachingProcessorConfig.GapValue (typically
+// decimal.StaleNaN for VictoriaMetrics staleness termination).
+//
+// The gap value is only emitted when:
+//  1. GapValue is non-nil in config
+//  2. A cache entry exists (not a cold start)
+//  3. Zero real data points remain after deduplication (the series went silent)
+func (cp *CachingProcessor) fillGapsWithNaN(result *model.CloudwatchData, meta requestMetadata) {
+	if cp.config.GapValue == nil {
+		return
+	}
+
+	dps := result.GetMetricDataResult.DataPoints
+
+	// Only emit gap value when CW returned zero real data points — the series went silent.
+	if len(dps) > 0 {
+		return
+	}
+
 	cached, hasCached := cp.cache.Get(meta.cacheKey)
 	if !hasCached {
 		return
 	}
 
-	timeSinceLast := time.Since(cached.LastTimestamp)
-	if timeSinceLast <= time.Duration(meta.period)*time.Second {
-		return
-	}
+	periodDuration := time.Duration(meta.period) * time.Second
+	gapVal := *cp.config.GapValue
+	nanTS := cached.LastTimestamp.Add(periodDuration).Truncate(periodDuration)
+	dps = append(dps, model.DataPoint{Value: &gapVal, Timestamp: nanTS})
 
-	promutil.TimeseriesEmptyScrapeCounter.WithLabelValues(namespace, result.MetricName, meta.statistic).Inc()
+	promutil.TimeseriesGapFillPointsCounter.Add(1)
+	result.GetMetricDataResult.DataPoints = dps
 }
 
-// updateCacheFromResult advances the cache to the newest datapoint timestamp in the result.
+// updateCacheFromResult advances the cache to the newest real (non-NaN) datapoint timestamp.
+// NaN gap-fill points are excluded so the cache only advances based on actual CloudWatch data.
 func (cp *CachingProcessor) updateCacheFromResult(result *model.CloudwatchData, meta requestMetadata) {
 	var newestTimestamp time.Time
 	for _, dp := range result.GetMetricDataResult.DataPoints {
+		if dp.Value != nil && math.IsNaN(*dp.Value) {
+			continue
+		}
 		if dp.Timestamp.After(newestTimestamp) {
 			newestTimestamp = dp.Timestamp
 		}

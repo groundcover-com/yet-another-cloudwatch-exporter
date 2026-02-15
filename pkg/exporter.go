@@ -50,8 +50,9 @@ var Metrics = []prometheus.Collector{
 	promutil.TimeseriesCacheHitCounter,
 	promutil.TimeseriesCacheMissCounter,
 	promutil.TimeseriesCacheGapDetectedCounter,
-	promutil.TimeseriesEmptyScrapeCounter,
+	promutil.TimeseriesCacheGapCappedCounter,
 	promutil.TimeseriesDedupCounter,
+	promutil.TimeseriesGapFillPointsCounter,
 }
 
 const (
@@ -199,6 +200,17 @@ func WithCacheMaxPeriods(n int64) OptionsFunc {
 			return fmt.Errorf("CacheMaxPeriods must be a positive value")
 		}
 		o.cachingProcessorCfg.MaxPeriods = n
+		return nil
+	}
+}
+
+// WithGapValue sets the value emitted at cachedLastTimestamp + period when a gap is
+// detected and CloudWatch returns zero real data points for a cached series.
+// Callers typically pass decimal.StaleNaN to signal VictoriaMetrics to terminate
+// the stale series. Default is nil (no gap value emitted).
+func WithGapValue(v float64) OptionsFunc {
+	return func(o *options) error {
+		o.cachingProcessorCfg.GapValue = &v
 		return nil
 	}
 }
