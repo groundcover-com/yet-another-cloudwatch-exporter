@@ -1138,7 +1138,7 @@ func TestCachingProcessor_SmartLookback_BoundaryConditions(t *testing.T) {
 	}{
 		{
 			name:          "gap within effectiveMaxPeriods boundary",
-			timeSinceLast: 3 * time.Minute, // 180s → steady state (≤5*60)
+			timeSinceLast: 3 * time.Minute, // 180s → steady state (≤ effectiveDelay(60)+2*60 = 240)
 			period:        60,
 			description:   "should not be capped (steady state)",
 		},

@@ -22,10 +22,13 @@ import (
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/promutil"
 )
 
-// steadyStateMultiplier defines how many periods of timeSince are considered "steady state".
-// With CW publishing delay (~2min) and our delay offset, cached_last is typically 2-3 periods
-// behind the current scrape time. The multiplier adds buffer for timing variance.
-const steadyStateMultiplier int64 = 5
+// steadyStateThreshold returns the maximum timeSinceSeconds that is still considered
+// "steady state" for a given period. It accounts for the delay we apply (which pushes
+// cached timestamps into the past) plus 2 periods of buffer for scrape-interval jitter.
+// If timeSinceSeconds exceeds this, the metric has a genuine gap.
+func steadyStateThreshold(period int64) int64 {
+	return effectiveDelay(period) + 2*period
+}
 
 // CachingProcessorConfig holds configuration for the CachingProcessor.
 type CachingProcessorConfig struct {
@@ -179,7 +182,7 @@ func (cp *CachingProcessor) adjustRequestWindows(namespace string, requests []*m
 		promutil.TimeseriesCacheHitCounter.Inc()
 
 		timeSinceSeconds := int64(now.Sub(cached.LastTimestamp).Seconds())
-		if timeSinceSeconds <= steadyStateMultiplier*period {
+		if timeSinceSeconds <= steadyStateThreshold(period) {
 			cp.applySteadyStateWindow(req, period)
 		} else {
 			maxPeriods := effectiveMaxPeriods(period)
