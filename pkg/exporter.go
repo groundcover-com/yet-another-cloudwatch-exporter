@@ -24,6 +24,7 @@ import (
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/clients/cloudwatch"
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/config"
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/job"
+	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/job/getmetricdata"
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/model"
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/promutil"
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/resourceinventory"
@@ -46,6 +47,12 @@ var Metrics = []prometheus.Collector{
 	promutil.DuplicateMetricsFilteredCounter,
 	promutil.CloudwatchRateLimitWaitCounter,
 	promutil.CloudwatchRateLimitAllowedCounter,
+	promutil.TimeseriesCacheHitCounter,
+	promutil.TimeseriesCacheMissCounter,
+	promutil.TimeseriesCacheGapDetectedCounter,
+	promutil.TimeseriesCacheGapCappedCounter,
+	promutil.TimeseriesDedupCounter,
+	promutil.TimeseriesGapFillPointsCounter,
 }
 
 const (
@@ -76,6 +83,8 @@ type options struct {
 	featureFlags          featureFlagsMap
 	cloudwatchConcurrency cloudwatch.ConcurrencyConfig
 	globalRateLimiter     *cloudwatch.GlobalRateLimiter
+	timeseriesCache       *getmetricdata.TimeseriesCache
+	cachingProcessorCfg   getmetricdata.CachingProcessorConfig
 }
 
 // IsFeatureEnabled implements the FeatureFlags interface, allowing us to inject the options-configure feature flags in the rest of the code.
@@ -160,6 +169,55 @@ func ResourceInventory(store resourceinventory.Store) OptionsFunc {
 	}
 }
 
+// WithTimeseriesCache sets the timeseries cache used for deduplication and gap-aware
+// lookback window adjustment on GetMetricData calls. When nil (default), no caching is performed.
+// The name parameter is used as a key prefix to isolate cache entries between different
+// integration instances that may scrape the same CloudWatch metrics.
+func WithTimeseriesCache(cache *getmetricdata.TimeseriesCache, name string) OptionsFunc {
+	return func(o *options) error {
+		o.timeseriesCache = cache
+		o.cachingProcessorCfg.KeyPrefix = name
+		return nil
+	}
+}
+
+// WithCacheMinPeriods sets the minimum number of periods to look back when fetching
+// metrics via GetMetricData. This ensures CloudWatch has had enough time to populate
+// the metric bucket. Default is 1.
+func WithCacheMinPeriods(n int64) OptionsFunc {
+	return func(o *options) error {
+		if n <= 0 {
+			return fmt.Errorf("CacheMinPeriods must be a positive value")
+		}
+		o.cachingProcessorCfg.MinPeriods = n
+		return nil
+	}
+}
+
+// WithCacheMaxPeriods sets the maximum number of periods the lookback window can
+// grow to when a gap is detected. For example, with a 60s period and MaxPeriods=5,
+// the window can grow up to 300s. Default is 5.
+func WithCacheMaxPeriods(n int64) OptionsFunc {
+	return func(o *options) error {
+		if n <= 0 {
+			return fmt.Errorf("CacheMaxPeriods must be a positive value")
+		}
+		o.cachingProcessorCfg.MaxPeriods = n
+		return nil
+	}
+}
+
+// WithGapValue sets the value emitted at cachedLastTimestamp + period when a gap is
+// detected and CloudWatch returns zero real data points for a cached series.
+// Callers typically pass decimal.StaleNaN to signal VictoriaMetrics to terminate
+// the stale series. Default is nil (no gap value emitted).
+func WithGapValue(v float64) OptionsFunc {
+	return func(o *options) error {
+		o.cachingProcessorCfg.GapValue = &v
+		return nil
+	}
+}
+
 // EnableFeatureFlag is an option that enables a feature flag on the YACE's entrypoint.
 func EnableFeatureFlag(flags ...string) OptionsFunc {
 	return func(o *options) error {
@@ -178,6 +236,7 @@ func defaultOptions() options {
 		featureFlags:          make(featureFlagsMap),
 		cloudwatchConcurrency: DefaultCloudwatchConcurrency,
 		resourceInventory:     resourceinventory.Nop(),
+		cachingProcessorCfg:   getmetricdata.DefaultCachingProcessorConfig(),
 	}
 }
 
@@ -226,6 +285,8 @@ func UpdateMetrics(
 		options.globalRateLimiter,
 		options.taggingAPIConcurrency,
 		options.resourceInventory,
+		options.timeseriesCache,
+		options.cachingProcessorCfg,
 	)
 
 	metrics, observedMetricLabels, err := promutil.BuildMetrics(cloudwatchData, options.labelsSnakeCase, logger)
