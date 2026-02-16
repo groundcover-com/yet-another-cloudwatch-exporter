@@ -171,9 +171,12 @@ func ResourceInventory(store resourceinventory.Store) OptionsFunc {
 
 // WithTimeseriesCache sets the timeseries cache used for deduplication and gap-aware
 // lookback window adjustment on GetMetricData calls. When nil (default), no caching is performed.
-func WithTimeseriesCache(cache *getmetricdata.TimeseriesCache) OptionsFunc {
+// The name parameter is used as a key prefix to isolate cache entries between different
+// integration instances that may scrape the same CloudWatch metrics.
+func WithTimeseriesCache(cache *getmetricdata.TimeseriesCache, name string) OptionsFunc {
 	return func(o *options) error {
 		o.timeseriesCache = cache
+		o.cachingProcessorCfg.KeyPrefix = name
 		return nil
 	}
 }

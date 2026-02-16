@@ -73,6 +73,39 @@ func TestBuildCacheKey_NoDimensions(t *testing.T) {
 	assert.Equal(t, key1, key2)
 }
 
+func TestBuildCacheKeyWithPrefix_DifferentPrefixesDifferentKeys(t *testing.T) {
+	dims := []model.Dimension{{Name: "FunctionName", Value: "HelloLogger"}}
+	key1 := BuildCacheKeyWithPrefix("integration-a", "AWS/Lambda", "Invocations", dims, "Sum")
+	key2 := BuildCacheKeyWithPrefix("integration-b", "AWS/Lambda", "Invocations", dims, "Sum")
+	assert.NotEqual(t, key1, key2, "different prefixes should produce different keys")
+}
+
+func TestBuildCacheKeyWithPrefix_SamePrefixSameKey(t *testing.T) {
+	dims := []model.Dimension{{Name: "FunctionName", Value: "HelloLogger"}}
+	key1 := BuildCacheKeyWithPrefix("my-integration", "AWS/Lambda", "Invocations", dims, "Sum")
+	key2 := BuildCacheKeyWithPrefix("my-integration", "AWS/Lambda", "Invocations", dims, "Sum")
+	assert.Equal(t, key1, key2, "same prefix and inputs should produce same key")
+}
+
+func TestBuildCacheKeyWithPrefix_EmptyPrefixMatchesNonPrefixed(t *testing.T) {
+	dims := []model.Dimension{{Name: "InstanceId", Value: "i-123"}}
+	keyNoPrefix := BuildCacheKey("AWS/EC2", "CPUUtilization", dims, "Average")
+	keyEmptyPrefix := BuildCacheKeyWithPrefix("", "AWS/EC2", "CPUUtilization", dims, "Average")
+	assert.Equal(t, keyNoPrefix, keyEmptyPrefix, "empty prefix should match non-prefixed key")
+}
+
+func TestBuildCacheKeyWithPrefix_PrefixIsolatesSameMetric(t *testing.T) {
+	dims := []model.Dimension{{Name: "FunctionName", Value: "HelloLogger"}}
+	// Simulate two integrations scraping the same metric
+	key1 := BuildCacheKeyWithPrefix("test-erez-5", "AWS/Lambda", "Invocations", dims, "Sum")
+	key2 := BuildCacheKeyWithPrefix("aviv-test-cw", "AWS/Lambda", "Invocations", dims, "Sum")
+	keyNoPrefix := BuildCacheKey("AWS/Lambda", "Invocations", dims, "Sum")
+
+	assert.NotEqual(t, key1, key2, "different integrations should have different keys")
+	assert.NotEqual(t, key1, keyNoPrefix, "prefixed key should differ from non-prefixed")
+	assert.NotEqual(t, key2, keyNoPrefix, "prefixed key should differ from non-prefixed")
+}
+
 func TestTimeseriesCache_GetSet(t *testing.T) {
 	cache := NewTimeseriesCache(1 * time.Minute)
 	defer cache.Stop()

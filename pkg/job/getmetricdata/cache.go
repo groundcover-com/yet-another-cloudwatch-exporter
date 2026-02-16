@@ -72,9 +72,17 @@ func (tc *TimeseriesCache) Stop() {
 // Uses FNV-1a hash for zero-allocation key computation.
 // Each field is hashed independently and XORed together, making the result order-independent.
 func BuildCacheKey(namespace string, metricName string, dimensions []model.Dimension, statistic string) uint64 {
+	return BuildCacheKeyWithPrefix("", namespace, metricName, dimensions, statistic)
+}
+
+func BuildCacheKeyWithPrefix(prefix string, namespace string, metricName string, dimensions []model.Dimension, statistic string) uint64 {
 	result := fnvHashKeyValue("namespace", namespace)
 	result ^= fnvHashKeyValue("metric", metricName)
 	result ^= fnvHashKeyValue("statistic", statistic)
+
+	if prefix != "" {
+		result ^= fnvHashKeyValue("prefix", prefix)
+	}
 
 	for _, d := range dimensions {
 		result ^= fnvHashKeyValue(d.Name, d.Value)

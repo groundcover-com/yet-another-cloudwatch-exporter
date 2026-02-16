@@ -32,6 +32,13 @@ func steadyStateThreshold(period int64) int64 {
 
 // CachingProcessorConfig holds configuration for the CachingProcessor.
 type CachingProcessorConfig struct {
+	// KeyPrefix is mixed into every cache key to isolate cache entries between
+	// different integration instances that may scrape the same CloudWatch metrics.
+	// Without a prefix, two integrations scraping the same metric would share
+	// cache state, causing incorrect deduplication.
+	// Typically set to the integration name or ID.
+	KeyPrefix string
+
 	// MinPeriods is the number of periods to look back on cache miss (cold start).
 	// On the first scrape for a timeseries there is no cached state, so we query
 	// this many periods. Keeping it at 1 means "just fetch 1 period; if CW has
@@ -164,7 +171,7 @@ func (cp *CachingProcessor) adjustRequestWindows(namespace string, requests []*m
 
 		period := req.GetMetricDataProcessingParams.Period
 		statistic := req.GetMetricDataProcessingParams.Statistic
-		key := BuildCacheKey(namespace, req.MetricName, req.Dimensions, statistic)
+		key := BuildCacheKeyWithPrefix(cp.config.KeyPrefix, namespace, req.MetricName, req.Dimensions, statistic)
 
 		metadata[req] = requestMetadata{
 			cacheKey:  key,
@@ -221,7 +228,7 @@ func (cp *CachingProcessor) applyGapRecoveryWindow(req *model.CloudwatchData, na
 		cp.logger.Warn("[GAP_CAPPED] lookback capped at max",
 			"namespace", namespace,
 			"metric", req.MetricName,
-			"key", BuildCacheKey(namespace, req.MetricName, req.Dimensions, req.GetMetricDataProcessingParams.Statistic),
+			"key", BuildCacheKeyWithPrefix(cp.config.KeyPrefix, namespace, req.MetricName, req.Dimensions, req.GetMetricDataProcessingParams.Statistic),
 			"needed_seconds", neededLength,
 			"capped_to", maxLength,
 		)
