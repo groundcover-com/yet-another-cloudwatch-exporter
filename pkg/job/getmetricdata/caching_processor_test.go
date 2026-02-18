@@ -1222,18 +1222,18 @@ func TestCachingProcessor_SmartLookback_BoundaryConditions(t *testing.T) {
 }
 
 // =============================================================================
-// effectiveMaxPeriods Tests
+// effectiveDelay Tests
 // =============================================================================
 
 func TestEffectiveDelay(t *testing.T) {
 	assert.Equal(t, int64(120), effectiveDelay(60), "1 min period → 120s")
 	assert.Equal(t, int64(120), effectiveDelay(120), "2 min period → 120s")
 	assert.Equal(t, int64(120), effectiveDelay(180), "3 min period → 120s")
-	assert.Equal(t, int64(240), effectiveDelay(240), "4 min period → 1 period (240s)")
-	assert.Equal(t, int64(300), effectiveDelay(300), "5 min period → 1 period (300s)")
-	assert.Equal(t, int64(600), effectiveDelay(600), "10 min period → 1 period (600s)")
-	assert.Equal(t, int64(0), effectiveDelay(900), "15 min period → 0")
-	assert.Equal(t, int64(0), effectiveDelay(3600), "1 hour period → 0")
+	assert.Equal(t, int64(120), effectiveDelay(240), "4 min period → 120s")
+	assert.Equal(t, int64(300), effectiveDelay(300), "5 min period → 300s")
+	assert.Equal(t, int64(300), effectiveDelay(600), "10 min period → 300s")
+	assert.Equal(t, int64(300), effectiveDelay(900), "15 min period → 300s")
+	assert.Equal(t, int64(300), effectiveDelay(3600), "1 hour period → 300s")
 }
 
 func TestCachingProcessor_DelayApplied_SteadyState(t *testing.T) {
@@ -1245,9 +1245,9 @@ func TestCachingProcessor_DelayApplied_SteadyState(t *testing.T) {
 	}{
 		{"60s period → 120s delay", 60, 120},
 		{"180s period → 120s delay", 180, 120},
+		{"240s period → 120s delay", 240, 120},
 		{"300s period → 300s delay", 300, 300},
-		{"600s period → 600s delay", 600, 600},
-		{"3600s period → 0 delay", 3600, 0},
+		{"3600s period → 300s delay", 3600, 300},
 	}
 
 	for _, tc := range testCases {
@@ -1308,7 +1308,7 @@ func TestCachingProcessor_DelayApplied_ColdStart(t *testing.T) {
 	}{
 		{"60s cold start → 120s delay", 60, 120},
 		{"300s cold start → 300s delay", 300, 300},
-		{"3600s cold start → 0 delay", 3600, 0},
+		{"3600s cold start → 300s delay", 3600, 300},
 	}
 
 	for _, tc := range testCases {
