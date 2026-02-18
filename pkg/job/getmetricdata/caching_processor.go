@@ -144,17 +144,14 @@ func effectiveMaxPeriods(periodSeconds int64) int64 {
 // is significant relative to their period. Long-period metrics don't need delay since
 // the data is already well in the past by the time we query.
 //
-//	Period 1-3 min  (60-180s)  → 120s (2 minutes)
-//	Period 3-10 min (181-600s) → 1 period
-//	Period > 10 min (>600s)    → 0
+//	Period ≤ 4 min  (≤240s) → 120s (2 minutes)
+//	Period > 4 min  (>240s) → 300s (5 minutes)
 func effectiveDelay(periodSeconds int64) int64 {
 	switch {
-	case periodSeconds <= 180: // 1-3 minutes
+	case periodSeconds <= 240: // ≤ 4 minutes
 		return 120
-	case periodSeconds <= 600: // 3-10 minutes
-		return periodSeconds
-	default: // > 10 minutes
-		return 0
+	default: // > 4 minutes
+		return 300
 	}
 }
 
