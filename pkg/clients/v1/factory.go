@@ -296,16 +296,18 @@ func (c *CachingFactory) GetCloudwatchClient(region string, accountID string, ro
 	}
 
 	if cachedClient := c.clients[role][region].cloudwatch; cachedClient != nil {
-		return cloudwatch_client.NewLimitedConcurrencyClient(cachedClient, concurrency.NewLimiter())
+		client := cachedClient
+		if globalRateLimiter != nil {
+			client = cloudwatch_client.NewRateLimitedClient(client, globalRateLimiter, region, accountID, role.RoleArn)
+		}
+		return cloudwatch_client.NewLimitedConcurrencyClient(client, concurrency.NewLimiter())
 	}
 	client := createCloudWatchClient(c.logger, c.session, &region, role, c.fips)
 
-	// Apply global rate limiter if provided
+	c.clients[role][region].cloudwatch = client
 	if globalRateLimiter != nil {
 		client = cloudwatch_client.NewRateLimitedClient(client, globalRateLimiter, region, accountID, role.RoleArn)
 	}
-
-	c.clients[role][region].cloudwatch = client
 	return cloudwatch_client.NewLimitedConcurrencyClient(client, concurrency.NewLimiter())
 }
 

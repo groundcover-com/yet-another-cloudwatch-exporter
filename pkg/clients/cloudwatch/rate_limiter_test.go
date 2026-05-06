@@ -282,13 +282,16 @@ func TestRateLimitingUsesIndependentAccountRegionBuckets(t *testing.T) {
 	err = firstBucketClient.ListMetrics(context.Background(), "test", nil, false, nil)
 	require.NoError(t, err)
 
-	shortCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
+	differentAccountCtx, cancelDifferentAccount := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelDifferentAccount()
 
-	err = sameRegionDifferentAccountClient.ListMetrics(shortCtx, "test", nil, false, nil)
+	err = sameRegionDifferentAccountClient.ListMetrics(differentAccountCtx, "test", nil, false, nil)
 	require.NoError(t, err)
 
-	err = sameAccountDifferentRegionClient.ListMetrics(shortCtx, "test", nil, false, nil)
+	differentRegionCtx, cancelDifferentRegion := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancelDifferentRegion()
+
+	err = sameAccountDifferentRegionClient.ListMetrics(differentRegionCtx, "test", nil, false, nil)
 	require.NoError(t, err)
 }
 
