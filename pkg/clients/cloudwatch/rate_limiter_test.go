@@ -301,6 +301,7 @@ func TestRateLimitingBehavior(t *testing.T) {
 func TestRateLimitingUsesIndependentAccountRegionBuckets(t *testing.T) {
 	config := RateLimiterConfig{
 		ListMetrics: &APIRateLimit{Count: 1, Duration: time.Minute},
+		Bucketed:    true,
 	}
 
 	limiter, err := NewGlobalRateLimiter(config)
@@ -321,6 +322,29 @@ func TestRateLimitingUsesIndependentAccountRegionBuckets(t *testing.T) {
 
 	err = sameAccountDifferentRegionClient.ListMetrics(shortCtx, "test", nil, false, nil)
 	require.NoError(t, err)
+}
+
+func TestRateLimitingUsesGlobalBucketWhenBucketedIsDisabled(t *testing.T) {
+	config := RateLimiterConfig{
+		ListMetrics: &APIRateLimit{Count: 1, Duration: time.Minute},
+		Bucketed:    false,
+	}
+
+	limiter, err := NewGlobalRateLimiter(config)
+	require.NoError(t, err)
+
+	firstClient := NewRateLimitedClient(&mockClient{}, limiter, "us-east-1", "111111111111", "test-role")
+	differentAccountRegionClient := NewRateLimitedClient(&mockClient{}, limiter, "us-west-2", "222222222222", "test-role")
+
+	err = firstClient.ListMetrics(context.Background(), "test", nil, false, nil)
+	require.NoError(t, err)
+
+	shortCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err = differentAccountRegionClient.ListMetrics(shortCtx, "test", nil, false, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "context deadline")
 }
 
 func TestPerAPIRateLimitingBehavior(t *testing.T) {

@@ -41,6 +41,7 @@ type RateLimiterConfig struct {
 	ListMetrics         *APIRateLimit
 	GetMetricData       *APIRateLimit
 	GetMetricStatistics *APIRateLimit
+	Bucketed            bool
 }
 
 type GlobalRateLimiter struct {
@@ -56,6 +57,7 @@ type rateLimiterBucketKey struct {
 
 type rateLimiterBuckets struct {
 	cfg      APIRateLimit
+	bucketed bool
 	limiters map[rateLimiterBucketKey]*rate.Limiter
 	mu       sync.Mutex
 }
@@ -64,7 +66,7 @@ func NewGlobalRateLimiter(config RateLimiterConfig) (*GlobalRateLimiter, error) 
 	limiter := &GlobalRateLimiter{}
 
 	if config.ListMetrics != nil {
-		l, err := newRateLimiterBuckets(config.ListMetrics, listMetricsMaxTPS)
+		l, err := newRateLimiterBuckets(config.ListMetrics, listMetricsMaxTPS, config.Bucketed)
 		if err != nil {
 			return nil, fmt.Errorf("invalid ListMetrics rate limit: %w", err)
 		}
@@ -72,7 +74,7 @@ func NewGlobalRateLimiter(config RateLimiterConfig) (*GlobalRateLimiter, error) 
 	}
 
 	if config.GetMetricData != nil {
-		l, err := newRateLimiterBuckets(config.GetMetricData, getMetricDataMaxTPS)
+		l, err := newRateLimiterBuckets(config.GetMetricData, getMetricDataMaxTPS, config.Bucketed)
 		if err != nil {
 			return nil, fmt.Errorf("invalid GetMetricData rate limit: %w", err)
 		}
@@ -80,7 +82,7 @@ func NewGlobalRateLimiter(config RateLimiterConfig) (*GlobalRateLimiter, error) 
 	}
 
 	if config.GetMetricStatistics != nil {
-		l, err := newRateLimiterBuckets(config.GetMetricStatistics, getMetricStatisticsMaxTPS)
+		l, err := newRateLimiterBuckets(config.GetMetricStatistics, getMetricStatisticsMaxTPS, config.Bucketed)
 		if err != nil {
 			return nil, fmt.Errorf("invalid GetMetricStatistics rate limit: %w", err)
 		}
@@ -90,13 +92,14 @@ func NewGlobalRateLimiter(config RateLimiterConfig) (*GlobalRateLimiter, error) 
 	return limiter, nil
 }
 
-func newRateLimiterBuckets(cfg *APIRateLimit, maxTPS int) (*rateLimiterBuckets, error) {
+func newRateLimiterBuckets(cfg *APIRateLimit, maxTPS int, bucketed bool) (*rateLimiterBuckets, error) {
 	if _, err := createLimiter(cfg); err != nil {
 		return nil, err
 	}
 
 	return &rateLimiterBuckets{
 		cfg:      capRateLimit(cfg, maxTPS),
+		bucketed: bucketed,
 		limiters: make(map[rateLimiterBucketKey]*rate.Limiter),
 	}, nil
 }
@@ -115,6 +118,9 @@ func (b *rateLimiterBuckets) get(accountID string, region string) *rate.Limiter 
 	key := rateLimiterBucketKey{
 		accountID: accountID,
 		region:    region,
+	}
+	if !b.bucketed {
+		key = rateLimiterBucketKey{}
 	}
 
 	b.mu.Lock()
