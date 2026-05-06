@@ -16,7 +16,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
 	"sync"
 	"time"
 
@@ -24,12 +23,6 @@ import (
 
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/model"
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/promutil"
-)
-
-const (
-	listMetricsMaxTPS         = 25
-	getMetricDataMaxTPS       = 500
-	getMetricStatisticsMaxTPS = 400
 )
 
 type APIRateLimit struct {
@@ -66,7 +59,7 @@ func NewGlobalRateLimiter(config RateLimiterConfig) (*GlobalRateLimiter, error) 
 	limiter := &GlobalRateLimiter{}
 
 	if config.ListMetrics != nil {
-		l, err := newRateLimiterBuckets(config.ListMetrics, listMetricsMaxTPS, config.Bucketed)
+		l, err := newRateLimiterBuckets(config.ListMetrics, config.Bucketed)
 		if err != nil {
 			return nil, fmt.Errorf("invalid ListMetrics rate limit: %w", err)
 		}
@@ -74,7 +67,7 @@ func NewGlobalRateLimiter(config RateLimiterConfig) (*GlobalRateLimiter, error) 
 	}
 
 	if config.GetMetricData != nil {
-		l, err := newRateLimiterBuckets(config.GetMetricData, getMetricDataMaxTPS, config.Bucketed)
+		l, err := newRateLimiterBuckets(config.GetMetricData, config.Bucketed)
 		if err != nil {
 			return nil, fmt.Errorf("invalid GetMetricData rate limit: %w", err)
 		}
@@ -82,7 +75,7 @@ func NewGlobalRateLimiter(config RateLimiterConfig) (*GlobalRateLimiter, error) 
 	}
 
 	if config.GetMetricStatistics != nil {
-		l, err := newRateLimiterBuckets(config.GetMetricStatistics, getMetricStatisticsMaxTPS, config.Bucketed)
+		l, err := newRateLimiterBuckets(config.GetMetricStatistics, config.Bucketed)
 		if err != nil {
 			return nil, fmt.Errorf("invalid GetMetricStatistics rate limit: %w", err)
 		}
@@ -92,26 +85,16 @@ func NewGlobalRateLimiter(config RateLimiterConfig) (*GlobalRateLimiter, error) 
 	return limiter, nil
 }
 
-func newRateLimiterBuckets(cfg *APIRateLimit, maxTPS int, bucketed bool) (*rateLimiterBuckets, error) {
+func newRateLimiterBuckets(cfg *APIRateLimit, bucketed bool) (*rateLimiterBuckets, error) {
 	if _, err := createLimiter(cfg); err != nil {
 		return nil, err
 	}
 
 	return &rateLimiterBuckets{
-		cfg:      capRateLimit(cfg, maxTPS),
+		cfg:      *cfg,
 		bucketed: bucketed,
 		limiters: make(map[rateLimiterBucketKey]*rate.Limiter),
 	}, nil
-}
-
-func capRateLimit(cfg *APIRateLimit, maxTPS int) APIRateLimit {
-	ratePerSecond := math.Min(float64(cfg.Count)/cfg.Duration.Seconds(), float64(maxTPS))
-	burst := min(cfg.Count, maxTPS)
-
-	return APIRateLimit{
-		Count:    burst,
-		Duration: time.Duration(float64(time.Second) * float64(burst) / ratePerSecond),
-	}
 }
 
 func (b *rateLimiterBuckets) get(accountID string, region string) *rate.Limiter {

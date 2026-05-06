@@ -186,38 +186,6 @@ func TestNewGlobalRateLimiter(t *testing.T) {
 	}
 }
 
-func TestNewGlobalRateLimiterCapsAPIQuotas(t *testing.T) {
-	limiter, err := NewGlobalRateLimiter(RateLimiterConfig{
-		ListMetrics:         &APIRateLimit{Count: 100, Duration: time.Second},
-		GetMetricData:       &APIRateLimit{Count: 600, Duration: time.Second},
-		GetMetricStatistics: &APIRateLimit{Count: 500, Duration: time.Second},
-	})
-	require.NoError(t, err)
-
-	listMetricsLimiter := limiter.listMetrics.get("111111111111", "us-east-1")
-	assert.InDelta(t, 25.0, float64(listMetricsLimiter.Limit()), 0.001)
-	assert.Equal(t, 25, listMetricsLimiter.Burst())
-
-	getMetricDataLimiter := limiter.getMetricData.get("111111111111", "us-east-1")
-	assert.InDelta(t, 500.0, float64(getMetricDataLimiter.Limit()), 0.001)
-	assert.Equal(t, 500, getMetricDataLimiter.Burst())
-
-	getMetricStatisticsLimiter := limiter.getMetricStatistics.get("111111111111", "us-east-1")
-	assert.InDelta(t, 400.0, float64(getMetricStatisticsLimiter.Limit()), 0.001)
-	assert.Equal(t, 400, getMetricStatisticsLimiter.Burst())
-}
-
-func TestNewGlobalRateLimiterCapsBurstForLongerDurations(t *testing.T) {
-	limiter, err := NewGlobalRateLimiter(RateLimiterConfig{
-		ListMetrics: &APIRateLimit{Count: 1000, Duration: time.Minute},
-	})
-	require.NoError(t, err)
-
-	listMetricsLimiter := limiter.listMetrics.get("111111111111", "us-east-1")
-	assert.InDelta(t, 1000.0/60.0, float64(listMetricsLimiter.Limit()), 0.001)
-	assert.Equal(t, 25, listMetricsLimiter.Burst())
-}
-
 func TestNewRateLimitedClient(t *testing.T) {
 	mockClient := &mockClient{}
 
