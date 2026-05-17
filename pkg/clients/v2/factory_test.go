@@ -300,7 +300,7 @@ func TestCachingFactory_GetCloudwatchClient(t *testing.T) {
 		clients := output.clients[defaultRole]["region1"]
 		require.NotNil(t, clients)
 		// Can't do equality comparison due to concurrency limiter
-		assert.NotNil(t, output.GetCloudwatchClient("region1", defaultRole, cloudwatch_client.ConcurrencyConfig{SingleLimit: 1}, nil))
+		assert.NotNil(t, output.GetCloudwatchClient("region1", "111111111111", defaultRole, cloudwatch_client.ConcurrencyConfig{SingleLimit: 1}, nil))
 	})
 
 	t.Run("unrefreshed cache creates a new client", func(t *testing.T) {
@@ -318,8 +318,15 @@ func TestCachingFactory_GetCloudwatchClient(t *testing.T) {
 		require.NotNil(t, clients)
 		require.Nil(t, clients.cloudwatch)
 
-		output.GetCloudwatchClient("region1", defaultRole, cloudwatch_client.ConcurrencyConfig{SingleLimit: 1}, nil)
+		limiter, err := cloudwatch_client.NewGlobalRateLimiter(cloudwatch_client.RateLimiterConfig{
+			ListMetrics: &cloudwatch_client.APIRateLimit{Count: 1, Duration: time.Second},
+		})
+		require.NoError(t, err)
+
+		output.GetCloudwatchClient("region1", "111111111111", defaultRole, cloudwatch_client.ConcurrencyConfig{SingleLimit: 1}, limiter)
 		assert.NotNil(t, clients.cloudwatch)
+		_, cachedRateLimited := clients.cloudwatch.(*cloudwatch_client.SimpleRateLimitedClient)
+		assert.False(t, cachedRateLimited, "CloudWatch cache should store the raw client, not an account-specific rate limiter")
 	})
 }
 

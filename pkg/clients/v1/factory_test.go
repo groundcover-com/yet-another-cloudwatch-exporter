@@ -727,11 +727,18 @@ func TestClientCacheGetCloudwatchClient(t *testing.T) {
 	testGetAWSClient(
 		t, "Cloudwatch",
 		func(t *testing.T, cache *CachingFactory, region string, role model.Role) {
-			iface := cache.GetCloudwatchClient(region, role, cloudwatch.ConcurrencyConfig{SingleLimit: 1}, nil)
+			limiter, err := cloudwatch.NewGlobalRateLimiter(cloudwatch.RateLimiterConfig{
+				ListMetrics: &cloudwatch.APIRateLimit{Count: 1, Duration: time.Second},
+			})
+			require.NoError(t, err)
+
+			iface := cache.GetCloudwatchClient(region, "111111111111", role, cloudwatch.ConcurrencyConfig{SingleLimit: 1}, limiter)
 			if iface == nil {
 				t.Fail()
 				return
 			}
+			_, cachedRateLimited := cache.clients[role][region].cloudwatch.(*cloudwatch.SimpleRateLimitedClient)
+			require.False(t, cachedRateLimited, "CloudWatch cache should store the raw client, not an account-specific rate limiter")
 		})
 }
 
