@@ -73,7 +73,12 @@ func getMetricDataForQueriesForCustomNamespace(
 
 					for _, stat := range metric.Statistics {
 						data = append(data, &model.CloudwatchData{
-							MetricName:   metric.Name,
+							// Name from what ListMetrics returned, not what we asked for.
+							// Identical in the normal case (ListMetrics filters by exact
+							// name); differs only for the "*" wildcard, where the page holds
+							// many names. Without this a wildcard job would query AWS with an
+							// empty metric name and get 400 ValidationError.
+							MetricName:   cwMetric.MetricName,
 							ResourceName: customNamespaceJob.Name,
 							Namespace:    customNamespaceJob.Namespace,
 							Dimensions:   cwMetric.Dimensions,
