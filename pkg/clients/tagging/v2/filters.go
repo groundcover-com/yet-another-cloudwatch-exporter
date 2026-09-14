@@ -20,13 +20,16 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/arn"
 	"github.com/aws/aws-sdk-go-v2/service/amp"
 	"github.com/aws/aws-sdk-go-v2/service/apigateway"
+	apigatewaytypes "github.com/aws/aws-sdk-go-v2/service/apigateway/types"
 	"github.com/aws/aws-sdk-go-v2/service/apigatewayv2"
+	apigatewayv2types "github.com/aws/aws-sdk-go-v2/service/apigatewayv2/types"
 	"github.com/aws/aws-sdk-go-v2/service/autoscaling"
 	"github.com/aws/aws-sdk-go-v2/service/databasemigrationservice"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/shield"
 	"github.com/aws/aws-sdk-go-v2/service/storagegateway"
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/endpoints"
 
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/model"
 	"github.com/prometheus-community/yet-another-cloudwatch-exporter/pkg/promutil"
@@ -37,7 +40,7 @@ type ServiceFilter struct {
 	ResourceFunc func(context.Context, client, model.DiscoveryJob, string) ([]*model.TaggedResource, error)
 
 	// FilterFunc can be used to modify the input resources or to drop based on some condition
-	FilterFunc func(context.Context, client, []*model.TaggedResource) ([]*model.TaggedResource, error)
+	FilterFunc func(context.Context, client, model.DiscoveryJob, string, []*model.TaggedResource) ([]*model.TaggedResource, error)
 }
 
 // ServiceFilters maps a service namespace to (optional) ServiceFilter
@@ -49,53 +52,36 @@ var ServiceFilters = map[string]ServiceFilter{
 		//
 		// Here we use the ApiGateway API to map resource correctly. For backward compatibility,
 		// in v1 REST APIs we change the ARN to replace the ApiId with ApiName, while for v2 APIs
-		// we leave the ARN as-is.
-		FilterFunc: func(ctx context.Context, client client, inputResources []*model.TaggedResource) ([]*model.TaggedResource, error) {
-			var limit int32 = 500 // max number of results per page. default=25, max=500
-			const maxPages = 10
-			input := apigateway.GetRestApisInput{Limit: &limit}
-			output := apigateway.GetRestApisOutput{}
-			var pageNum int
-
-			paginator := apigateway.NewGetRestApisPaginator(client.apiGatewayAPI, &input, func(options *apigateway.GetRestApisPaginatorOptions) {
-				options.StopOnDuplicateToken = true
-			})
-			for paginator.HasMorePages() && pageNum <= maxPages {
-				page, err := paginator.NextPage(ctx)
-				promutil.APIGatewayAPICounter.Inc()
-				if err != nil {
-					return nil, fmt.Errorf("error calling apiGatewayAPI.GetRestApis, %w", err)
-				}
-				pageNum++
-				output.Items = append(output.Items, page.Items...)
-			}
-
-			outputV2, err := client.apiGatewayV2API.GetApis(ctx, &apigatewayv2.GetApisInput{})
+		// we leave the ARN as-is. Every API left unmatched after that pass is untagged (the
+		// tagging API never returned it), so it is appended as a tagless resource: one listing
+		// discovers tagged and untagged APIs alike.
+		FilterFunc: func(ctx context.Context, client client, job model.DiscoveryJob, region string, inputResources []*model.TaggedResource) ([]*model.TaggedResource, error) {
+			restApis, v2Apis, err := listAPIGateways(ctx, client)
 			if err != nil {
-				return nil, fmt.Errorf("error calling apigatewayv2.GetApis, %w", err)
+				return nil, err
 			}
 
 			var outputResources []*model.TaggedResource
 			for _, resource := range inputResources {
-				for i, gw := range output.Items {
+				for i, gw := range restApis {
 					if strings.HasSuffix(resource.ARN, "/restapis/"+*gw.Id) {
 						r := resource
 						r.ARN = strings.ReplaceAll(resource.ARN, *gw.Id, *gw.Name)
 						outputResources = append(outputResources, r)
-						output.Items = append(output.Items[:i], output.Items[i+1:]...)
+						restApis = append(restApis[:i], restApis[i+1:]...)
 						break
 					}
 				}
-				for i, gw := range outputV2.Items {
+				for i, gw := range v2Apis {
 					if strings.HasSuffix(resource.ARN, "/apis/"+*gw.ApiId) {
 						outputResources = append(outputResources, resource)
-						outputV2.Items = append(outputV2.Items[:i], outputV2.Items[i+1:]...)
+						v2Apis = append(v2Apis[:i], v2Apis[i+1:]...)
 						break
 					}
 				}
 			}
 
-			return outputResources, nil
+			return append(outputResources, apiGatewayResources(job, region, restApis, v2Apis)...), nil
 		},
 	},
 	"AWS/AutoScaling": {
@@ -135,7 +121,7 @@ var ServiceFilters = map[string]ServiceFilter{
 	},
 	"AWS/DMS": {
 		// Append the replication instance identifier to DMS task and instance ARNs
-		FilterFunc: func(ctx context.Context, client client, inputResources []*model.TaggedResource) ([]*model.TaggedResource, error) {
+		FilterFunc: func(ctx context.Context, client client, _ model.DiscoveryJob, _ string, inputResources []*model.TaggedResource) ([]*model.TaggedResource, error) {
 			if len(inputResources) == 0 {
 				return inputResources, nil
 			}
@@ -391,4 +377,62 @@ var ServiceFilters = map[string]ServiceFilter{
 			return output, nil
 		},
 	},
+}
+
+// listAPIGateways returns every v1 REST API and v2 HTTP/WebSocket API in the region.
+func listAPIGateways(ctx context.Context, client client) ([]apigatewaytypes.RestApi, []apigatewayv2types.Api, error) {
+	var limit int32 = 500 // max number of results per page. default=25, max=500
+	const maxPages = 10
+	var restApis []apigatewaytypes.RestApi
+	var pageNum int
+
+	paginator := apigateway.NewGetRestApisPaginator(client.apiGatewayAPI, &apigateway.GetRestApisInput{Limit: &limit}, func(options *apigateway.GetRestApisPaginatorOptions) {
+		options.StopOnDuplicateToken = true
+	})
+	for paginator.HasMorePages() && pageNum <= maxPages {
+		page, err := paginator.NextPage(ctx)
+		promutil.APIGatewayAPICounter.Inc()
+		if err != nil {
+			return nil, nil, fmt.Errorf("error calling apiGatewayAPI.GetRestApis, %w", err)
+		}
+		pageNum++
+		restApis = append(restApis, page.Items...)
+	}
+
+	outputV2, err := client.apiGatewayV2API.GetApis(ctx, &apigatewayv2.GetApisInput{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("error calling apigatewayv2.GetApis, %w", err)
+	}
+
+	return restApis, outputV2.Items, nil
+}
+
+// apiGatewayResources builds tagless resources for untagged APIs: REST keyed by ApiName
+// (the CloudWatch dimension value), v2 by ApiId. API Gateway responses carry no ARN, so
+// it is assembled from the region's partition. Tagless resources never satisfy searchTags.
+func apiGatewayResources(job model.DiscoveryJob, region string, restApis []apigatewaytypes.RestApi, v2Apis []apigatewayv2types.Api) []*model.TaggedResource {
+	if len(job.SearchTags) > 0 {
+		return nil
+	}
+	partition := "aws"
+	if p, ok := endpoints.PartitionForRegion(endpoints.DefaultPartitions(), region); ok {
+		partition = p.ID()
+	}
+	arnPrefix := fmt.Sprintf("arn:%s:apigateway:%s::", partition, region)
+
+	resources := make([]*model.TaggedResource, 0, len(restApis)+len(v2Apis))
+	add := func(path string) {
+		resources = append(resources, &model.TaggedResource{ARN: arnPrefix + path, Namespace: job.Namespace, Region: region})
+	}
+	for _, gw := range restApis {
+		if gw.Id != nil && gw.Name != nil {
+			add("/restapis/" + *gw.Name)
+		}
+	}
+	for _, gw := range v2Apis {
+		if gw.ApiId != nil {
+			add("/apis/" + *gw.ApiId)
+		}
+	}
+	return resources
 }
