@@ -55,14 +55,14 @@ var ServiceFilters = map[string]ServiceFilter{
 		// (v2 ARNs stay as-is) and, because each API matches once, drops the untagged duplicate
 		// of any API the tagging service already returned with its tags.
 		ResourceFunc: func(ctx context.Context, client client, job model.DiscoveryJob, region string) ([]*model.TaggedResource, error) {
-			restApis, v2Apis, err := listApiGateways(ctx, client)
+			restApis, v2Apis, err := listAPIGateways(ctx, client)
 			if err != nil {
 				return nil, err
 			}
 			return apiGatewayResources(job, region, restApis, v2Apis), nil
 		},
 		FilterFunc: func(ctx context.Context, client client, inputResources []*model.TaggedResource) ([]*model.TaggedResource, error) {
-			restApis, v2Apis, err := listApiGateways(ctx, client)
+			restApis, v2Apis, err := listAPIGateways(ctx, client)
 			if err != nil {
 				return nil, err
 			}
@@ -385,8 +385,8 @@ var ServiceFilters = map[string]ServiceFilter{
 	},
 }
 
-// listApiGateways returns every v1 REST API and v2 HTTP/WebSocket API in the region.
-func listApiGateways(ctx context.Context, client client) ([]apigatewaytypes.RestApi, []apigatewayv2types.Api, error) {
+// listAPIGateways returns every v1 REST API and v2 HTTP/WebSocket API in the region.
+func listAPIGateways(ctx context.Context, client client) ([]apigatewaytypes.RestApi, []apigatewayv2types.Api, error) {
 	var limit int32 = 500 // max number of results per page. default=25, max=500
 	const maxPages = 10
 	var restApis []apigatewaytypes.RestApi
