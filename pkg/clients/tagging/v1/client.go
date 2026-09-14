@@ -148,7 +148,7 @@ func (c client) GetResources(ctx context.Context, job model.DiscoveryJob, region
 		}
 
 		if ext.FilterFunc != nil {
-			filteredResources, err := ext.FilterFunc(ctx, c, resources)
+			filteredResources, err := ext.FilterFunc(ctx, c, job, region, resources)
 			if err != nil {
 				return nil, fmt.Errorf("failed to apply FilterFunc for %s, %w", svc.Namespace, err)
 			}

@@ -26,10 +26,10 @@ func TestApiGatewayResources(t *testing.T) {
 		arns = append(arns, r.ARN)
 	}
 	sort.Strings(arns)
-	// Id-keyed like the tagging API, so FilterFunc renames REST ARNs and dedupes tagged duplicates.
+	// REST keyed by ApiName (the CloudWatch dimension), v2 by ApiId.
 	want := []string{
 		"arn:aws-cn:apigateway:cn-north-1::/apis/h1",
-		"arn:aws-cn:apigateway:cn-north-1::/restapis/abc123",
+		"arn:aws-cn:apigateway:cn-north-1::/restapis/orders",
 	}
 	if len(arns) != len(want) {
 		t.Fatalf("got %v, want %v", arns, want)

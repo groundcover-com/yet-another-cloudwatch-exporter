@@ -40,7 +40,7 @@ type ServiceFilter struct {
 	ResourceFunc func(context.Context, client, model.DiscoveryJob, string) ([]*model.TaggedResource, error)
 
 	// FilterFunc can be used to modify the input resources or to drop based on some condition
-	FilterFunc func(context.Context, client, []*model.TaggedResource) ([]*model.TaggedResource, error)
+	FilterFunc func(context.Context, client, model.DiscoveryJob, string, []*model.TaggedResource) ([]*model.TaggedResource, error)
 }
 
 // ServiceFilters maps a service namespace to (optional) ServiceFilter
@@ -50,18 +50,12 @@ var ServiceFilters = map[string]ServiceFilter{
 		// the ApiName (display name). See https://docs.aws.amazon.com/apigateway/latest/developerguide/arn-format-reference.html
 		// However, in metrics, the ApiId dimension uses the ApiName as value.
 		//
-		// ResourceFunc emits every API the account has, Id-keyed like the tagging API does, so
-		// untagged APIs are discovered too. FilterFunc then renames v1 REST ARNs to the ApiName
-		// (v2 ARNs stay as-is) and, because each API matches once, drops the untagged duplicate
-		// of any API the tagging service already returned with its tags.
-		ResourceFunc: func(ctx context.Context, client client, job model.DiscoveryJob, region string) ([]*model.TaggedResource, error) {
-			restApis, v2Apis, err := listAPIGateways(ctx, client)
-			if err != nil {
-				return nil, err
-			}
-			return apiGatewayResources(job, region, restApis, v2Apis), nil
-		},
-		FilterFunc: func(ctx context.Context, client client, inputResources []*model.TaggedResource) ([]*model.TaggedResource, error) {
+		// Here we use the ApiGateway API to map resource correctly. For backward compatibility,
+		// in v1 REST APIs we change the ARN to replace the ApiId with ApiName, while for v2 APIs
+		// we leave the ARN as-is. Every API left unmatched after that pass is untagged (the
+		// tagging API never returned it), so it is appended as a tagless resource: one listing
+		// discovers tagged and untagged APIs alike.
+		FilterFunc: func(ctx context.Context, client client, job model.DiscoveryJob, region string, inputResources []*model.TaggedResource) ([]*model.TaggedResource, error) {
 			restApis, v2Apis, err := listAPIGateways(ctx, client)
 			if err != nil {
 				return nil, err
@@ -87,7 +81,7 @@ var ServiceFilters = map[string]ServiceFilter{
 				}
 			}
 
-			return outputResources, nil
+			return append(outputResources, apiGatewayResources(job, region, restApis, v2Apis)...), nil
 		},
 	},
 	"AWS/AutoScaling": {
@@ -127,7 +121,7 @@ var ServiceFilters = map[string]ServiceFilter{
 	},
 	"AWS/DMS": {
 		// Append the replication instance identifier to DMS task and instance ARNs
-		FilterFunc: func(ctx context.Context, client client, inputResources []*model.TaggedResource) ([]*model.TaggedResource, error) {
+		FilterFunc: func(ctx context.Context, client client, _ model.DiscoveryJob, _ string, inputResources []*model.TaggedResource) ([]*model.TaggedResource, error) {
 			if len(inputResources) == 0 {
 				return inputResources, nil
 			}
@@ -413,10 +407,13 @@ func listAPIGateways(ctx context.Context, client client) ([]apigatewaytypes.Rest
 	return restApis, outputV2.Items, nil
 }
 
-// apiGatewayResources builds Id-keyed, tagless resources for every API, in the same ARN
-// shape the tagging API returns so the ApiGateway FilterFunc treats them uniformly.
-// API Gateway responses carry no ARN, so it is assembled from the region's partition.
+// apiGatewayResources builds tagless resources for untagged APIs: REST keyed by ApiName
+// (the CloudWatch dimension value), v2 by ApiId. API Gateway responses carry no ARN, so
+// it is assembled from the region's partition. Tagless resources never satisfy searchTags.
 func apiGatewayResources(job model.DiscoveryJob, region string, restApis []apigatewaytypes.RestApi, v2Apis []apigatewayv2types.Api) []*model.TaggedResource {
+	if len(job.SearchTags) > 0 {
+		return nil
+	}
 	partition := "aws"
 	if p, ok := endpoints.PartitionForRegion(endpoints.DefaultPartitions(), region); ok {
 		partition = p.ID()
@@ -425,14 +422,11 @@ func apiGatewayResources(job model.DiscoveryJob, region string, restApis []apiga
 
 	resources := make([]*model.TaggedResource, 0, len(restApis)+len(v2Apis))
 	add := func(path string) {
-		resource := &model.TaggedResource{ARN: arnPrefix + path, Namespace: job.Namespace, Region: region}
-		if resource.FilterThroughTags(job.SearchTags) {
-			resources = append(resources, resource)
-		}
+		resources = append(resources, &model.TaggedResource{ARN: arnPrefix + path, Namespace: job.Namespace, Region: region})
 	}
 	for _, gw := range restApis {
 		if gw.Id != nil && gw.Name != nil {
-			add("/restapis/" + *gw.Id)
+			add("/restapis/" + *gw.Name)
 		}
 	}
 	for _, gw := range v2Apis {
