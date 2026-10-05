@@ -36,7 +36,8 @@ type CachingProcessorConfig struct {
 	// different integration instances that may scrape the same CloudWatch metrics.
 	// Without a prefix, two integrations scraping the same metric would share
 	// cache state, causing incorrect deduplication.
-	// Typically set to the integration name or ID.
+	// Typically set to the integration name or ID; ForScope narrows it further
+	// to one account and region.
 	KeyPrefix string
 
 	// MinPeriods is the number of periods to look back on cache miss (cold start).
@@ -66,6 +67,15 @@ func DefaultCachingProcessorConfig() CachingProcessorConfig {
 		MinPeriods: 1,
 		MaxPeriods: 5,
 	}
+}
+
+// ForScope returns a copy of the config whose cache keys are isolated to one
+// account and region. Dimensions alone don't identify a series: the same
+// DBClusterIdentifier can exist in several regions of one integration, and a
+// shared entry lets the first region to answer mark the others' points as seen.
+func (c CachingProcessorConfig) ForScope(accountID, region string) CachingProcessorConfig {
+	c.KeyPrefix = c.KeyPrefix + "/" + accountID + "/" + region
+	return c
 }
 
 // requestMetadata holds pre-computed information about a request that we need

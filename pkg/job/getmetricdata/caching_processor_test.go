@@ -2227,3 +2227,83 @@ func TestCachingProcessor_SteadyState_NoNaN(t *testing.T) {
 			"scrape %d: cache should advance to latest real point", scrape)
 	}
 }
+
+// A cluster name reused across regions inside one integration collided in the
+// shared cache: the first region to answer advanced LastTimestamp, and every
+// other region's point at that timestamp was then dropped as already seen.
+func TestCachingProcessor_SameDimensionsAcrossScopesSharingOneCache(t *testing.T) {
+	type scope struct{ accountID, region string }
+	cases := []struct {
+		Name   string
+		first  scope
+		second scope
+	}{
+		{
+			Name:   "two regions scraping the same cluster name in one account each keep their own data point",
+			first:  scope{accountID: "111111111111", region: "region-a"},
+			second: scope{accountID: "111111111111", region: "region-b"},
+		},
+		{
+			Name:   "two accounts scraping the same cluster name in one region each keep their own data point",
+			first:  scope{accountID: "111111111111", region: "region-a"},
+			second: scope{accountID: "222222222222", region: "region-a"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.Name, func(t *testing.T) {
+			sample := time.Now().Add(-2 * time.Minute)
+			cache := NewTimeseriesCache()
+			defer cache.Stop()
+
+			config := DefaultCachingProcessorConfig()
+			config.KeyPrefix = "integration-1"
+
+			scrape := func(s scope) []model.DataPoint {
+				client := testClient{
+					GetMetricDataFunc: func(_ context.Context, data []*model.CloudwatchData, _ string, _ time.Time, _ time.Time) []cloudwatch.MetricDataResult {
+						results := make([]cloudwatch.MetricDataResult, 0, len(data))
+						for _, d := range data {
+							results = append(results, cloudwatch.MetricDataResult{
+								ID:         d.GetMetricDataProcessingParams.QueryID,
+								DataPoints: []cloudwatch.DataPoint{{Value: aws.Float64(42), Timestamp: sample}},
+							})
+						}
+						return results
+					},
+				}
+				inner := NewDefaultProcessor(promslog.NewNopLogger(), client, 500, 1)
+				cp := NewCachingProcessor(promslog.NewNopLogger(), inner, cache, config.ForScope(s.accountID, s.region))
+				results, err := cp.Run(context.Background(), "AWS/RDS", []*model.CloudwatchData{sharedClusterRequest()})
+				require.NoError(t, err)
+				require.Len(t, results, 1)
+				return results[0].GetMetricDataResult.DataPoints
+			}
+
+			first := scrape(tc.first)
+			second := scrape(tc.second)
+
+			require.Len(t, first, 1)
+			require.Len(t, second, 1, "the second scope's point must not be deduplicated against the first scope's")
+			assert.Equal(t, sample, second[0].Timestamp)
+		})
+	}
+}
+
+// sharedClusterRequest is the same series identity as seen from any region or
+// account; the inner processor consumes the request, so each scrape builds its own.
+func sharedClusterRequest() *model.CloudwatchData {
+	return &model.CloudwatchData{
+		MetricName:   "CPUUtilization",
+		ResourceName: "cluster-a",
+		Namespace:    "AWS/RDS",
+		Dimensions: []model.Dimension{
+			{Name: "DBClusterIdentifier", Value: "cluster-a"},
+			{Name: "Role", Value: "WRITER"},
+		},
+		GetMetricDataProcessingParams: &model.GetMetricDataProcessingParams{
+			Period:    60,
+			Length:    300,
+			Statistic: "Average",
+		},
+	}
+}

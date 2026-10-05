@@ -68,7 +68,7 @@ func ScrapeAwsData(
 					gmdProcessor := getmetricdata.NewDefaultProcessor(logger, cloudwatchClient, metricsPerQuery, cloudwatchConcurrency.GetMetricData)
 					var processor getMetricDataProcessor = gmdProcessor
 					if tsCache != nil {
-						processor = getmetricdata.NewCachingProcessor(jobLogger, gmdProcessor, tsCache, cachingConfig)
+						processor = getmetricdata.NewCachingProcessor(jobLogger, gmdProcessor, tsCache, cachingConfig.ForScope(accountID, region))
 					}
 					taggingClient := tagging.WithExternalStore(jobLogger, factory.GetTaggingClient(region, role, taggingAPIConcurrency), store)
 
@@ -165,7 +165,7 @@ func ScrapeAwsData(
 					gmdProcessor := getmetricdata.NewDefaultProcessor(logger, cloudwatchClient, metricsPerQuery, cloudwatchConcurrency.GetMetricData)
 					var processor getMetricDataProcessor = gmdProcessor
 					if tsCache != nil {
-						processor = getmetricdata.NewCachingProcessor(jobLogger, gmdProcessor, tsCache, cachingConfig)
+						processor = getmetricdata.NewCachingProcessor(jobLogger, gmdProcessor, tsCache, cachingConfig.ForScope(accountID, region))
 					}
 					metrics := runCustomNamespaceJob(ctx, jobLogger, customNamespaceJob, cloudwatchClient, processor)
 					metricResult := model.CloudwatchMetricResult{
