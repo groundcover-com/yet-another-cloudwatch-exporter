@@ -40,8 +40,16 @@ func NewClient(logger *slog.Logger, cloudwatchAPI *cloudwatch.Client) cloudwatch
 
 func (c client) ListMetrics(ctx context.Context, namespace string, metric *model.MetricConfig, recentlyActiveOnly bool, fn func(page []*model.Metric)) error {
 	filter := &cloudwatch.ListMetricsInput{
-		MetricName: aws.String(metric.Name),
-		Namespace:  aws.String(namespace),
+		Namespace: aws.String(namespace),
+	}
+	// HACK: metric name "*" means "every metric in this namespace". YACE's job model is
+	// name-driven (one ListMetrics call per configured name), which cannot express "I
+	// don't know the names, bring the namespace" — needed for namespaces that have no
+	// preset. CloudWatch's MetricName is optional, so omitting it enumerates. It must be
+	// OMITTED, not blanked: aws.String("") marshals MetricName= and AWS answers 400
+	// ValidationError. Only custom namespace jobs use this (job/custom.go).
+	if metric.Name != "*" {
+		filter.MetricName = aws.String(metric.Name)
 	}
 	if recentlyActiveOnly {
 		filter.RecentlyActive = types.RecentlyActivePt3h
