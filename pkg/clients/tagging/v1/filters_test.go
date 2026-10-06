@@ -184,13 +184,51 @@ func TestApiGatewayFilterFunc(t *testing.T) {
 				},
 			},
 		},
+		{
+			"untagged apis are appended after tagged ones",
+			client{
+				apiGatewayAPI: apiGatewayClient{
+					getRestApisOutput: &apigateway.GetRestApisOutput{
+						Items: []*apigateway.RestApi{
+							{Id: aws.String("tagged1"), Name: aws.String("tagged-api")},
+							{Id: aws.String("untag01"), Name: aws.String("untagged-api")},
+						},
+					},
+				},
+				apiGatewayV2API: apiGatewayV2Client{
+					getRestApisOutput: &apigatewayv2.GetApisOutput{
+						Items: []*apigatewayv2.Api{
+							{ApiId: aws.String("untagv2"), Name: aws.String("untagged-http")},
+						},
+					},
+				},
+			},
+			[]*model.TaggedResource{
+				{
+					ARN:       "arn:aws:apigateway:us-east-1::/restapis/tagged1",
+					Namespace: "apigateway",
+					Region:    "us-east-1",
+					Tags:      []model.Tag{{Key: "Test", Value: "Value"}},
+				},
+			},
+			[]*model.TaggedResource{
+				{
+					ARN:       "arn:aws:apigateway:us-east-1::/restapis/tagged-api",
+					Namespace: "apigateway",
+					Region:    "us-east-1",
+					Tags:      []model.Tag{{Key: "Test", Value: "Value"}},
+				},
+				{ARN: "arn:aws:apigateway:us-east-1::/restapis/untagged-api", Region: "us-east-1"},
+				{ARN: "arn:aws:apigateway:us-east-1::/apis/untagv2", Region: "us-east-1"},
+			},
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			apigateway := ServiceFilters["AWS/ApiGateway"]
 
-			outputResources, err := apigateway.FilterFunc(context.Background(), test.iface, test.inputResources)
+			outputResources, err := apigateway.FilterFunc(context.Background(), test.iface, model.DiscoveryJob{}, "us-east-1", test.inputResources)
 			if err != nil {
 				t.Logf("Error from FilterFunc: %v", err)
 				t.FailNow()
@@ -405,7 +443,7 @@ func TestDMSFilterFunc(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			dms := ServiceFilters["AWS/DMS"]
 
-			outputResources, err := dms.FilterFunc(context.Background(), test.iface, test.inputResources)
+			outputResources, err := dms.FilterFunc(context.Background(), test.iface, model.DiscoveryJob{}, "us-east-1", test.inputResources)
 			if err != nil {
 				t.Logf("Error from FilterFunc: %v", err)
 				t.FailNow()
