@@ -49,7 +49,14 @@ func (f *taggingWithExternalStore) GetResources(ctx context.Context, job model.D
 	}
 
 	// merge dedupe is nil safe, priority is the tagging service (the current yace implementation)
-	return f.mergeDedupResources(primRes, storeRes), nil
+	resources := f.mergeDedupResources(primRes, storeRes)
+
+	// An empty list without an error makes discovery export the whole namespace unfiltered.
+	if len(resources) == 0 && primErr != nil {
+		return nil, primErr
+	}
+
+	return resources, nil
 }
 
 func (f *taggingWithExternalStore) mergeDedupResources(taggingService, externalStore []*model.TaggedResource) []*model.TaggedResource {
