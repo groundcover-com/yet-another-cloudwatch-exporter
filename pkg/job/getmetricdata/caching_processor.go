@@ -84,6 +84,8 @@ type requestMetadata struct {
 	cacheKey  uint64
 	period    int64
 	statistic string
+	// coldStartFrom is the start of the cold-start window; zero when not a cold start.
+	coldStartFrom time.Time
 }
 
 // CachingProcessor wraps an inner processor (typically getmetricdata.Processor) and adds
@@ -192,29 +194,33 @@ func (cp *CachingProcessor) adjustRequestWindows(namespace string, requests []*m
 		statistic := req.GetMetricDataProcessingParams.Statistic
 		key := BuildCacheKeyWithPrefix(cp.config.KeyPrefix, namespace, req.MetricName, req.Dimensions, statistic)
 
-		metadata[req] = requestMetadata{
+		meta := requestMetadata{
 			cacheKey:  key,
 			period:    period,
 			statistic: statistic,
 		}
+		periodDuration := time.Duration(period) * time.Second
+		roundedNow := now.Truncate(periodDuration)
 
 		cached, ok := cp.cache.Get(key)
 		if !ok {
 			promutil.TimeseriesCacheMissCounter.Inc()
 			cp.applyColdStartWindow(req, period)
+			p := req.GetMetricDataProcessingParams
+			meta.coldStartFrom = roundedNow.Add(-time.Duration(p.Delay+p.Length) * time.Second)
+			metadata[req] = meta
 			continue
 		}
+		metadata[req] = meta
 
 		promutil.TimeseriesCacheHitCounter.Inc()
 
-		periodDuration := time.Duration(period) * time.Second
-		roundedNow := now.Truncate(periodDuration)
 		timeSinceSeconds := int64(roundedNow.Sub(cached.LastTimestamp).Seconds())
-		if timeSinceSeconds <= steadyStateThreshold(period) {
+		if timeSinceSeconds <= steadyStateThreshold(period) && !cached.NoDataYet {
 			cp.applySteadyStateWindow(req, period)
 		} else {
 			maxPeriods := effectiveMaxPeriods(period)
-			cp.applyGapRecoveryWindow(req, namespace, period, timeSinceSeconds, period*maxPeriods)
+			cp.applyGapRecoveryWindow(req, namespace, period, timeSinceSeconds, period*maxPeriods, cached.NoDataYet)
 		}
 	}
 
@@ -239,18 +245,20 @@ func (cp *CachingProcessor) applySteadyStateWindow(req *model.CloudwatchData, pe
 
 // applyGapRecoveryWindow sets an extended window to recover missed data after a gap.
 // Uses delay=0 to reach as close to "now" as possible, with length capped at maxLength.
-func (cp *CachingProcessor) applyGapRecoveryWindow(req *model.CloudwatchData, namespace string, period, timeSinceSeconds, maxLength int64) {
+func (cp *CachingProcessor) applyGapRecoveryWindow(req *model.CloudwatchData, namespace string, period, timeSinceSeconds, maxLength int64, noDataYet bool) {
 	promutil.TimeseriesCacheGapDetectedCounter.Inc()
 	neededLength := timeSinceSeconds + period
 	if neededLength > maxLength {
 		promutil.TimeseriesCacheGapCappedCounter.Inc()
-		cp.logger.Warn("[GAP_CAPPED] lookback capped at max",
-			"namespace", namespace,
-			"metric", req.MetricName,
-			"key", BuildCacheKeyWithPrefix(cp.config.KeyPrefix, namespace, req.MetricName, req.Dimensions, req.GetMetricDataProcessingParams.Statistic),
-			"needed_seconds", neededLength,
-			"capped_to", maxLength,
-		)
+		if !noDataYet { // a never-seen series (sparse metric) is not a gap worth a warning
+			cp.logger.Warn("[GAP_CAPPED] lookback capped at max",
+				"namespace", namespace,
+				"metric", req.MetricName,
+				"key", BuildCacheKeyWithPrefix(cp.config.KeyPrefix, namespace, req.MetricName, req.Dimensions, req.GetMetricDataProcessingParams.Statistic),
+				"needed_seconds", neededLength,
+				"capped_to", maxLength,
+			)
+		}
 		neededLength = maxLength
 	}
 	req.GetMetricDataProcessingParams.Length = neededLength
@@ -273,6 +281,7 @@ func (cp *CachingProcessor) deduplicateAndUpdateCache(results []*model.Cloudwatc
 		cp.filterSeenDataPoints(result, meta)
 		cp.fillGapsWithNaN(result, meta)
 		cp.updateCacheFromResult(result, meta)
+		cp.markEmptyColdStart(result, meta)
 	}
 }
 
@@ -320,7 +329,7 @@ func (cp *CachingProcessor) fillGapsWithNaN(result *model.CloudwatchData, meta r
 	}
 
 	cached, hasCached := cp.cache.Get(meta.cacheKey)
-	if !hasCached {
+	if !hasCached || cached.NoDataYet {
 		return
 	}
 
@@ -351,4 +360,24 @@ func (cp *CachingProcessor) updateCacheFromResult(result *model.CloudwatchData, 
 			Interval:      meta.period,
 		}, CacheTTL(meta.period))
 	}
+}
+
+// markEmptyColdStart remembers a cold start that came back empty. Without it the
+// next scrape cold-starts again, asks for a minute of the same age, and a namespace
+// that publishes later than the cold-start delay (AWS/NetworkELB ~2.5m) never
+// gets a first point. The entry sits one period before the window asked for, so
+// the next scrape's gap-recovery window includes that minute.
+func (cp *CachingProcessor) markEmptyColdStart(result *model.CloudwatchData, meta requestMetadata) {
+	if meta.coldStartFrom.IsZero() || len(result.GetMetricDataResult.DataPoints) > 0 {
+		return
+	}
+	if _, ok := cp.cache.Get(meta.cacheKey); ok {
+		return
+	}
+	periodDuration := time.Duration(meta.period) * time.Second
+	cp.cache.Set(meta.cacheKey, TimeseriesCacheEntry{
+		LastTimestamp: meta.coldStartFrom.Add(-periodDuration),
+		Interval:      meta.period,
+		NoDataYet:     true,
+	}, CacheTTL(meta.period))
 }
