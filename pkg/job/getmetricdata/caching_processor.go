@@ -375,8 +375,16 @@ func (cp *CachingProcessor) markEmptyColdStart(result *model.CloudwatchData, met
 		return
 	}
 	periodDuration := time.Duration(meta.period) * time.Second
+	catchUpFrom := meta.coldStartFrom.Add(-periodDuration)
+	// ponytail: once per series per cold start; a metric that never reports logs again every CacheTTL (11m at 60s period)
+	cp.logger.Info("[NO_DATA_YET] cold start returned no data, next scrape catches up via gap window",
+		"namespace", result.Namespace,
+		"metric", result.MetricName,
+		"key", meta.cacheKey,
+		"catch_up_from", catchUpFrom,
+	)
 	cp.cache.Set(meta.cacheKey, TimeseriesCacheEntry{
-		LastTimestamp: meta.coldStartFrom.Add(-periodDuration),
+		LastTimestamp: catchUpFrom,
 		Interval:      meta.period,
 		NoDataYet:     true,
 	}, CacheTTL(meta.period))
