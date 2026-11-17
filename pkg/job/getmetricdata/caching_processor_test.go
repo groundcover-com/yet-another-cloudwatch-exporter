@@ -2227,3 +2227,83 @@ func TestCachingProcessor_SteadyState_NoNaN(t *testing.T) {
 			"scrape %d: cache should advance to latest real point", scrape)
 	}
 }
+
+func nlbRequest() []*model.CloudwatchData {
+	return []*model.CloudwatchData{{
+		MetricName: "ProcessedBytes",
+		Namespace:  "AWS/NetworkELB",
+		Dimensions: []model.Dimension{{Name: "LoadBalancer", Value: "net/nlb/1"}},
+		GetMetricDataProcessingParams: &model.GetMetricDataProcessingParams{
+			Period: 60, Length: 60, Statistic: "Sum",
+		},
+	}}
+}
+
+// A cold start that comes back empty (data published later than the cold-start
+// delay) must not repeat the same window forever: the next scrape catches up
+// from the minute the cold start asked for.
+func TestCachingProcessor_EmptyColdStartCatchesUpNextScrape(t *testing.T) {
+	cache := NewTimeseriesCache()
+	defer cache.Stop()
+
+	type window struct{ start, end time.Time }
+	var windows []window
+	var published []cloudwatch.DataPoint // what CloudWatch has on the current call
+	client := testClient{
+		GetMetricDataFunc: func(_ context.Context, data []*model.CloudwatchData, _ string, start, end time.Time) []cloudwatch.MetricDataResult {
+			windows = append(windows, window{start, end})
+			var dps []cloudwatch.DataPoint
+			for _, dp := range published {
+				if !dp.Timestamp.Before(start) && dp.Timestamp.Before(end) {
+					dps = append(dps, dp)
+				}
+			}
+			return []cloudwatch.MetricDataResult{{ID: data[0].GetMetricDataProcessingParams.QueryID, DataPoints: dps}}
+		},
+	}
+	gap := math.NaN()
+	cp := NewCachingProcessor(promslog.NewNopLogger(), NewDefaultProcessor(promslog.NewNopLogger(), client, 500, 1), cache,
+		CachingProcessorConfig{MinPeriods: 1, MaxPeriods: 5, GapValue: &gap})
+
+	// Scrape 1: the minute asked for is not published yet.
+	results, err := cp.Run(context.Background(), "AWS/NetworkELB", nlbRequest())
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Empty(t, results[0].GetMetricDataResult.DataPoints)
+
+	// Scrape 2: that minute is now published. Pretend a minute passed by
+	// publishing it; the cache entry, not the clock, decides the window.
+	firstMinute := windows[0].start
+	published = []cloudwatch.DataPoint{{Value: aws.Float64(7), Timestamp: firstMinute}}
+	results, err = cp.Run(context.Background(), "AWS/NetworkELB", nlbRequest())
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+
+	assert.False(t, windows[1].start.After(firstMinute), "catch-up window must include the cold-start minute")
+	assert.True(t, windows[1].end.After(windows[0].end), "catch-up window must not keep the cold-start delay")
+	require.Len(t, results[0].GetMetricDataResult.DataPoints, 1)
+	assert.Equal(t, 7.0, *results[0].GetMetricDataResult.DataPoints[0].Value)
+	assert.Equal(t, firstMinute, results[0].GetMetricDataResult.DataPoints[0].Timestamp)
+}
+
+// A series that has never had data (sparse metric) must not get gap NaNs.
+func TestCachingProcessor_EmptyColdStartEmitsNoGapValue(t *testing.T) {
+	cache := NewTimeseriesCache()
+	defer cache.Stop()
+
+	client := testClient{
+		GetMetricDataFunc: func(_ context.Context, data []*model.CloudwatchData, _ string, _, _ time.Time) []cloudwatch.MetricDataResult {
+			return []cloudwatch.MetricDataResult{{ID: data[0].GetMetricDataProcessingParams.QueryID}}
+		},
+	}
+	gap := math.NaN()
+	cp := NewCachingProcessor(promslog.NewNopLogger(), NewDefaultProcessor(promslog.NewNopLogger(), client, 500, 1), cache,
+		CachingProcessorConfig{MinPeriods: 1, MaxPeriods: 5, GapValue: &gap})
+
+	for range 3 {
+		results, err := cp.Run(context.Background(), "AWS/NetworkELB", nlbRequest())
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+		assert.Empty(t, results[0].GetMetricDataResult.DataPoints)
+	}
+}

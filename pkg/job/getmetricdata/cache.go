@@ -28,6 +28,10 @@ type TimeseriesCacheEntry struct {
 	// Interval is the metric's period/interval in seconds, stored so we can make gap decisions
 	// without re-reading request params.
 	Interval int64
+	// NoDataYet marks an entry written after a cold start came back empty.
+	// LastTimestamp is then the minute before the one asked for, not a real point,
+	// so the next scrape catches up from there instead of cold-starting again.
+	NoDataYet bool
 }
 
 // TimeseriesCache is a TTL-based cache that tracks the last seen timestamp and interval
